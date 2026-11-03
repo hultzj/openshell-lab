@@ -72,7 +72,7 @@ Expected result: every call fails with `curl: (7) Failed to connect … after 1 
 not a 5-second timeout) and `exit=7`, including the AWS metadata address. `getent` shows
 `www.google.com` resolving to a `198.18.0.x` synthetic address.
 
-video::m4-network.mp4[width=960,poster=m4-network-poster.jpg,title="Allowed and denied egress from the sandbox (recorded on a lab cluster)"]
+video::m4-network.mp4[width=800,poster=m4-network-poster.jpg,title="Allowed and denied egress from the sandbox (recorded on a lab cluster)"]
 
 == Exercise 3: Same host, different program
 

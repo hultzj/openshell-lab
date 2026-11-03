@@ -104,7 +104,7 @@ link:https://console-openshift-console.{cluster_domain}/catalog/ns/{lab_namespac
 and under *Chart Repositories* the filter *OpenShell ZTM Demo (1)* appears. You could install from this tile, but the
 two OpenShift-specific settings in Exercise 3 are not in the form, so this lab installs from the CLI.
 
-video::m1-catalog.mp4[width=960,poster=m1-catalog-poster.jpg,title="The OpenShell chart in the Helm Charts catalog (recorded on a lab cluster)"]
+video::m1-catalog.mp4[width=800,poster=m1-catalog-poster.jpg,title="The OpenShell chart in the Helm Charts catalog (recorded on a lab cluster)"]
 
 image::03-catalog-tile.png[The Helm Charts catalog filtered to openshell, showing the Openshell Ztm Demo tile and the OpenShell ZTM Demo chart repository filter]
 
@@ -186,7 +186,7 @@ unset MAAS_API_KEY
 
 Expected result: after about a minute, `STATUS: deployed` and `REVISION: 1`.
 
-video::m1-install.mp4[width=960,poster=m1-install-poster.jpg,title="Registering the chart and installing the release (recorded on a lab cluster)"]
+video::m1-install.mp4[width=800,poster=m1-install-poster.jpg,title="Registering the chart and installing the release (recorded on a lab cluster)"]
 
 == Exercise 4: Identify what the install created
 

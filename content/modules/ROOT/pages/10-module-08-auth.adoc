@@ -102,7 +102,7 @@ openshell -g ztm-demo whoami
 Expected result: `whoami requires authentication` with `invalid token: Missing required claim: aud`. The gateway
 refused the token Keycloak issued.
 
-video::m8-device-login.mp4[width=960,poster=m8-device-login-poster.jpg,title="Device-flow sign-in to the gateway (recorded on a lab cluster)"]
+video::m8-device-login.mp4[width=800,poster=m8-device-login-poster.jpg,title="Device-flow sign-in to the gateway (recorded on a lab cluster)"]
 
 == Exercise 4: Add the audience and sign in again
 

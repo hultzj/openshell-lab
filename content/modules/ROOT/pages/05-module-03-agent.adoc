@@ -65,7 +65,7 @@ openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js
 Expected result: Pi reports a `package.json` and a server file (`server.js`, `index.js` or `app.js` in the lab
 runs), and usually that it installed dependencies, started the server and tested the endpoints.
 
-video::m3-pi-agent.mp4[width=960,poster=m3-pi-agent-poster.jpg,title="Pi writing and running code in the sandbox (recorded on a lab cluster)"]
+video::m3-pi-agent.mp4[width=800,poster=m3-pi-agent-poster.jpg,title="Pi writing and running code in the sandbox (recorded on a lab cluster)"]
 
 Pi often leaves its server running, names the server file as it likes, and sometimes puts the project in a
 subdirectory such as `/sandbox/express-api`. The block below finds the file that starts the server (the one that

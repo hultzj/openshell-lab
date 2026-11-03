@@ -88,7 +88,7 @@ Expected result: `/tmp`, `/var/tmp` and `/dev/shm` all show `drwxrwxrwt root`, a
 DENIED`. Same permissions, different outcome: the kernel's Landlock ruleset is the only difference. The
 same holds for `ls /` in Exercise 2, which DAC would allow.
 
-video::m5-landlock.mp4[width=960,poster=m5-landlock-poster.jpg,title="Allowed and denied paths, and the /tmp vs /var/tmp comparison (recorded on a lab cluster)"]
+video::m5-landlock.mp4[width=800,poster=m5-landlock-poster.jpg,title="Allowed and denied paths, and the /tmp vs /var/tmp comparison (recorded on a lab cluster)"]
 
 In short: the agent sees two writable directories, and the kernel enforces it even where Unix permissions would not.
 

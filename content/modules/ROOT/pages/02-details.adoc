@@ -39,7 +39,7 @@ logged in as you.
 
 Expected result: a panel titled *OpenShift command line terminal* opens with the prompt `bash-5.1 ~ $`.
 
-video::02-web-terminal.mp4[width=960,poster=02-web-terminal-poster.jpg,title="Logging in as lab-admin and starting the Web Terminal (recorded on a lab cluster)"]
+video::02-web-terminal.mp4[width=800,poster=02-web-terminal-poster.jpg,title="Logging in as lab-admin and starting the Web Terminal (recorded on a lab cluster)"]
 
 image::02-web-terminal.png[The OpenShift console in the Core platform perspective with the command line terminal open at the bottom, where oc whoami prints lab-admin]
 

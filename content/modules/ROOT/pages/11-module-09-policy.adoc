@@ -59,7 +59,7 @@ openshell sandbox exec {sandbox_name} < /dev/null -- node -e 'fetch("https://pyp
 Expected result: `curl -> pypi.org HTTP 200` and `node -> pypi.org ERR EACCES`. The new rule names `curl`
 only, so `node` is still refused.
 
-video::m9-policy.mp4[width=960,poster=m9-policy-poster.jpg,title="Allowing and revoking pypi.org on a running sandbox (recorded on a lab cluster)"]
+video::m9-policy.mp4[width=800,poster=m9-policy-poster.jpg,title="Allowing and revoking pypi.org on a running sandbox (recorded on a lab cluster)"]
 
 == Exercise 3: Revoke it
 

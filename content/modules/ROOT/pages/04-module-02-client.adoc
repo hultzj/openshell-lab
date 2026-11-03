@@ -75,7 +75,7 @@ Expected result: `No resources found in {lab_namespace} namespace.` (no public R
 `default` namespace prints `000` and `exit=28` (curl's timeout): the NetworkPolicy dropped its
 connection to the gateway, while the same Service answered your Web Terminal in Exercise 1.
 
-video::m2-gateway-access.mp4[width=960,poster=m2-gateway-access-poster.jpg,title="Connecting the CLI, and probing the gateway from another namespace (recorded on a lab cluster)"]
+video::m2-gateway-access.mp4[width=800,poster=m2-gateway-access-poster.jpg,title="Connecting the CLI, and probing the gateway from another namespace (recorded on a lab cluster)"]
 
 == Evidence checkpoint
 
