@@ -21,7 +21,7 @@ Pattern (ZTVP), and asks you to verify each restriction yourself instead of taki
 
 The lab progresses through these tasks:
 
-. Install OpenShell from the OpenShift Developer Catalog, with its API key stored in Vault.
+. Register OpenShell's Helm chart in the Developer Catalog and install it, with its API key in Vault and no public endpoint.
 . Connect the OpenShell CLI to the gateway.
 . Watch Pi write and run code through the Red Hat MaaS LLM.
 . Prove that the sandbox reaches only three approved hosts.
@@ -35,7 +35,7 @@ The lab progresses through these tasks:
 
 By the end of the lab you will be able to:
 
-* Deploy OpenShell on OpenShift from a Helm chart repository registered in the Developer Catalog.
+* Deploy OpenShell on OpenShift from a Helm chart repository registered in the Developer Catalog, reachable only from inside the cluster.
 * Demonstrate allowed and denied egress from an agent sandbox, and explain why denial is immediate.
 * Demonstrate Landlock filesystem enforcement inside a container, including for paths a root user would normally write.
 * Explain how a resolver token keeps the real LLM credential outside the sandbox.
