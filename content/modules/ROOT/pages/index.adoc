@@ -50,8 +50,9 @@ Compare the observed resource, policy, or event with the stated expected
 result before continuing. Facilitators: see
 xref:92-facilitator-guide.adoc[Facilitator Guide].
 
-Some modules include a short video recorded on a lab cluster. Watch it if you want to see the
-step before you run it, or if your own run differs.
+Every module, and the Web Terminal setup, includes a short video recorded on a lab cluster during a full run of
+this guide. Watch it if you want to see a step before you run it, or to compare when your own output differs. LLM
+output (Module 3) and generated names and timestamps will differ from yours.
 
 == Lab map
 

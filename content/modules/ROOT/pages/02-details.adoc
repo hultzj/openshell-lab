@@ -39,7 +39,9 @@ logged in as you.
 
 Expected result: a panel titled *OpenShift command line terminal* opens with the prompt `bash-5.1 ~ $`.
 
-image::02-web-terminal.png[The OpenShift console with the command line terminal open at the bottom, showing the bash prompt]
+video::02-web-terminal.mp4[width=960,poster=02-web-terminal-poster.jpg,title="Logging in as lab-admin and starting the Web Terminal (recorded on a lab cluster)"]
+
+image::02-web-terminal.png[The OpenShift console in the Core platform perspective with the command line terminal open at the bottom, where oc whoami prints lab-admin]
 
 NOTE: The Web Terminal stops after a period of inactivity and its home directory is not kept. If your
 terminal restarts, run the setup block below again. It is safe to re-run. This cluster's

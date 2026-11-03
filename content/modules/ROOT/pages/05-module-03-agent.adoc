@@ -65,26 +65,26 @@ openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js
 Expected result: Pi reports a `package.json` and a server file (`server.js`, `index.js` or `app.js` in the lab
 runs), and usually that it installed dependencies, started the server and tested the endpoints.
 
-video::m3-pi-agent.mp4[width=960,title="Pi writing and running code in the sandbox (recorded on a lab cluster)"]
+video::m3-pi-agent.mp4[width=960,poster=m3-pi-agent-poster.jpg,title="Pi writing and running code in the sandbox (recorded on a lab cluster)"]
 
-Pi often leaves its server running, and sometimes puts the project in a subdirectory such as
-`/sandbox/express-api`. The block below finds the directory with `package.json`, stops any running `node`
-process, installs dependencies, starts the server file Pi named, and calls each endpoint:
+Pi often leaves its server running, names the server file as it likes, and sometimes puts the project in a
+subdirectory such as `/sandbox/express-api`. The block below finds the file that starts the server (the one that
+calls `.listen(`), stops any running `node` process, installs dependencies in that directory, starts it, and calls
+each endpoint:
 
 [source,bash,role="execute",subs="attributes+"]
 ----
 openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
-D=$(dirname "$(find /sandbox -maxdepth 2 -name package.json -not -path "*/node_modules/*" | head -1)"); echo "project: $D"
-cd "$D" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
-for APP in "$(node -p "require(\"./package.json\").main || \"\"")" server.js index.js app.js; do [ -f "$APP" ] && break; done
-node "$APP" & sleep 3
+F=$(grep -rlE "\.listen[[:space:]]*\(" /sandbox --include=*.js --include=*.mjs --include=*.cjs --exclude-dir=node_modules | head -1); echo "server: $F"
+cd "$(dirname "$F")" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
+node "$(basename "$F")" & sleep 3
 curl -s localhost:3000/health; echo
 curl -s localhost:3000/items; echo
 curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\"price\":9.99}" localhost:3000/items; echo
 pkill -x node'
 ----
 
-Expected result: `project: /sandbox` or a subdirectory, `npm install` ends with a package count or `up to date`
+Expected result: `server: ` and the file Pi wrote (for example `/sandbox/server.js`), `npm install` ends with a package count or `up to date`
 (it reached `registry.npmjs.org`), `/health`
 returns `{"status":"ok"}`, `/items` returns three items, and the POST returns the new item with an `id`.
 The exact fields are whatever the model generated.

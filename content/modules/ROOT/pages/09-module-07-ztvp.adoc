@@ -106,6 +106,8 @@ Expected result: IDs ending in `/ns/{lab_namespace}/sa/{release_name}` (the gate
 SPIRE has registered the identities, but no OpenShell pod mounts the SPIFFE CSI volume, so nothing in this lab
 authenticates with an SVID yet.
 
+video::m7-ztvp.mp4[width=960,poster=m7-ztvp-poster.jpg,title="Following the key through Vault and External Secrets, and the identities SPIRE issued (recorded on a lab cluster)"]
+
 == Exercise 3: Open ACS Central
 
 [source,bash,role="execute",subs="attributes+"]

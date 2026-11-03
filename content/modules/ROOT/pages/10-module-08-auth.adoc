@@ -62,14 +62,15 @@ OLD_ID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users?username=de
 DEMO_PW=$(openssl rand -hex 8)
 jq -n --arg pw "$DEMO_PW" '{username:"demo-engineer",enabled:true,email:"demo-engineer@example.com",emailVerified:true,firstName:"Demo",lastName:"Engineer",credentials:[{type:"password",value:$pw,temporary:false}]}' \
   | curl -sk -o /dev/null -w "create user: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users"
-echo "demo-engineer password: $DEMO_PW"
 curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID" -H "Authorization: Bearer $ADMIN_TOKEN" \
   | jq '.attributes["oauth2.device.authorization.grant.enabled"] = "true"' \
   | curl -sk -o /dev/null -w "enable device grant: HTTP %\{http_code}\n" -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID"
+echo "demo-engineer password: $DEMO_PW"
 ----
 
-Expected result: `create user: HTTP 201`, `demo-engineer password: ` followed by 16 hexadecimal characters (keep it for
-Exercise 3; it exists only in your shell and in Keycloak), and `enable device grant: HTTP 204`.
+Expected result: `create user: HTTP 201`, `enable device grant: HTTP 204`, and on the last line
+`demo-engineer password: ` followed by 16 hexadecimal characters (keep it for Exercise 3; it exists only in your shell
+and in Keycloak, and the cleanup page deletes the user).
 
 == Exercise 3: Sign in, and see the token rejected
 
@@ -101,7 +102,7 @@ openshell -g ztm-demo whoami
 Expected result: `whoami requires authentication` with `invalid token: Missing required claim: aud`. The gateway
 refused the token Keycloak issued.
 
-video::m8-device-login.mp4[width=960,title="Device-flow sign-in to the gateway (recorded on a lab cluster)"]
+video::m8-device-login.mp4[width=960,poster=m8-device-login-poster.jpg,title="Device-flow sign-in to the gateway (recorded on a lab cluster)"]
 
 == Exercise 4: Add the audience and sign in again
 
