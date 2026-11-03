@@ -1,0 +1,16 @@
+# Facilitator prerequisite: the OpenShift Web Terminal, the participant's shell (the Showroom
+# terminal is off). Applied by `make -C automation prereqs` only when no web-terminal Subscription
+# exists, so teardown never removes an operator the cluster owner installed.
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: web-terminal
+  namespace: openshift-operators
+  labels:
+    app.kubernetes.io/part-of: openshell-lab
+spec:
+  channel: fast
+  name: web-terminal
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

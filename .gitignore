@@ -1,0 +1,24 @@
+# Never commit cluster artifacts, credentials or review logs
+cluster/install/
+**/auth/
+*.kubeconfig
+kubeconfig*
+install-config.yaml
+*.pem
+*.key
+.env
+.env.*
+values-secret*.yaml
+!values-secret.yaml.template
+.xreview/
+node_modules/
+www/
+build/
+.DS_Store
+.cache/
+evidence/
+# Playwright browser state from the live pass holds session cookies.
+.playwright-mcp/
+# Credentials: secrets reach make bootstrap through environment variables, never git.
+.env*
+*kubeconfig*

@@ -1,0 +1,108 @@
+= Module 9: Dynamic policy
+:navtitle: Module 9: Dynamic policy
+
+Agents' needs change: a new task needs a new package index. If every change meant redeploying the
+sandbox, teams would ask for broad rules up front. This module answers: *can we grant and revoke one
+destination for one program on a running agent, and prove both took effect?*
+
+You will confirm `pypi.org` is blocked, allow it for `curl` only, prove it, and revoke it.
+
+.New to OpenShell policy versions?
+[%collapsible]
+====
+* *Policy version* — each change creates a new numbered version; the supervisor loads it live.
+* *Hash* — a fingerprint of the policy content; identical content gives an identical hash.
+* *`--wait`* — the CLI returns only after the sandbox reports the new version loaded.
+====
+
+== Technical context
+
+`openshell policy update` adds or removes endpoints on the sandbox's stored policy. The gateway sends the
+new version to the supervisor, which swaps it in without restarting the sandbox. `openshell policy list`
+keeps the history.
+
+== Learning objectives
+
+* Read the effective policy and its version history.
+* Add an endpoint for a single binary and verify it, including for a binary that stays blocked.
+* Revoke the endpoint and verify the denial returns, without a pod restart.
+
+== Exercise 1: Confirm the starting state
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org/simple/requests/; echo "exit=$?"'
+openshell policy list {sandbox_name}
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+Expected result: `Failed to connect to pypi.org port 443 after 3 ms` and `exit=7`; the history shows the latest
+version as `Loaded`; and `restarts=0` with the pod's `uid=…` (note it for Exercise 3).
+
+TIP: `openshell policy get {sandbox_name} --full` prints the whole policy, including the network rules from Module 4.
+
+== Exercise 2: Allow pypi.org for curl
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --add-endpoint "pypi.org:443:read-write" --binary /usr/bin/curl --wait
+----
+
+Expected result: `✓ Policy version N submitted`, then `✓ Policy version N loaded (active version: N)`, in a few seconds.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w "curl -> pypi.org HTTP %\{http_code}\n" --max-time 5 https://pypi.org/simple/requests/
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e 'fetch("https://pypi.org/simple/requests/").then(r=>console.log("node -> pypi.org HTTP",r.status)).catch(e=>console.log("node -> pypi.org ERR",e.cause?e.cause.code:e.message))'
+----
+
+Expected result: `curl -> pypi.org HTTP 200` and `node -> pypi.org ERR EACCES`. The new rule names `curl`
+only, so `node` is still refused.
+
+video::m9-policy.mp4[width=960,title="Allowing and revoking pypi.org on a running sandbox (recorded on a lab cluster)"]
+
+== Exercise 3: Revoke it
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --remove-endpoint pypi.org:443 --wait
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org; echo "exit=$?"'
+openshell policy list {sandbox_name} | head -4
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+Expected result: a new version `loaded`; `Failed to connect to pypi.org` and `exit=7`; the newest version has the
+same hash as the version before your change (the policy is back to identical content); and still `restarts=0` with
+the same `uid` as in Exercise 1: the same pod, never restarted or replaced.
+
+In short: one endpoint, one binary, granted and revoked live, with the history recorded.
+
+.The scripted assertion for this exercise
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: sandbox probe did not run (github.com returned '$out')"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://pypi.org >/dev/null 2>&1 && { echo "FAIL: pypi.org still reachable"; exit 1; }
+  [ "$(oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='{.status.containerStatuses[0].restartCount}')" = 0 ] || { echo "FAIL: sandbox restarted"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== Evidence checkpoint
+
+* How do you know the sandbox was not restarted to apply the change?
+* After the revert, how can you tell the policy content is exactly what it was before?
+
+.Answer key
+[%collapsible]
+====
+* The pod's `restartCount` stayed `0` and its `uid` did not change (a replaced pod gets a new UID), and the CLI
+  reported the version as loaded by the running sandbox.
+* The newest version's hash equals the hash of the version before the change.
+====
+
+Proceed to xref:90-cleanup.adoc[Cleanup].

@@ -1,0 +1,111 @@
+= Facilitator Guide
+:navtitle: Facilitator Guide
+
+For facilitators provisioning lab environments ahead of class. Participants can skip this page.
+
+Each participant gets a dedicated cluster. The lab was verified on single-node OpenShift {ocp_version}
+on AWS (`m6i.8xlarge`, 32 vCPU and 128 GiB, 300 GB gp3) running the full Zero Trust Validated Pattern.
+
+== Cluster prerequisites
+
+[cols="2,3",options="header"]
+|===
+| Prerequisite | Check
+
+| OpenShift {ocp_version} (ZTVP supports 4.20 to 4.22), a default StorageClass
+| `oc get clusterversion; oc get storageclass`
+| Zero Trust Validated Pattern installed, every Argo CD application `Synced` and `Healthy`
+| `oc get applications.argoproj.io -A`
+| OpenShift GitOps (installed by ZTVP)
+| `oc get csv -n openshift-gitops-operator`
+| Capacity for OpenShell (about 1 vCPU and 2 GiB on top of ZTVP)
+| `oc adm top node`
+|===
+
+=== Install a single-node cluster (optional)
+
+`cluster/install-config.example.yaml` in this repository is the verified install configuration. Copy it outside the
+repository, fill in the pull secret and SSH key, and run `openshift-install create cluster`. It pins one
+availability zone, so it needs a single NAT gateway Elastic IP.
+
+=== Install ZTVP
+
+From a clone of `validatedpatterns/layered-zero-trust`, logged in as cluster-admin:
+
+[source,bash]
+----
+cp values-secret.yaml.template ~/values-secret-layered-zero-trust.yaml   # every value is generated
+./pattern.sh make install
+----
+
+If `make install` stops while waiting for Vault, wait until `oc get pod vault-0 -n vault` is `Running`,
+then run `./pattern.sh make load-secrets`. Load secrets after the API servers settle: during a kube-apiserver
+rollout, the Vault policy writes fail with `Handshake status 500`.
+
+== Lab prerequisites
+
+From a checkout of this repository, logged in as cluster-admin. The participant password comes from a local
+file or variable, never from git:
+
+[source,bash,subs="attributes+"]
+----
+LAB_USER_PASSWORD='<choose one>' make -C automation prereqs
+----
+
+This target:
+
+* subscribes the Web Terminal operator (`web-terminal`, channel `fast`), only if no Subscription for it exists;
+* creates the htpasswd identity provider `openshell-lab-htpasswd` and the user `{lab_user}` with cluster-admin
+  (ClusterRoleBinding `openshell-lab-participant`).
+
+The chart creates its own Vault policy and role (`openshell-admin`) at install time; no Vault setup is needed.
+
+== Provision the guide
+
+[source,bash]
+----
+make -C automation bootstrap
+make -C automation status
+----
+
+The Applications go to ZTVP's single Argo CD instance in `vp-gitops`. Repeat `status` until every Application shows `Synced` and `Healthy`.
+The Showroom guide has no terminal and no console tab (see `ui-config.yml`).
+
+== Verify every cluster
+
+[source,bash]
+----
+make -C automation verify
+----
+
+Every line must print `PASS`. Fix any `FAIL` before participants arrive.
+
+== Day of class
+
+* Share the Showroom URL (`oc -n {showroom_namespace} get route showroom`), the console URL, the `{lab_user}`
+  password and a MaaS API key per participant.
+* Check that the keys can use the model the guide names: `curl -s https://{maas_host}/v1/models -H "Authorization: Bearer <key>"`.
+  If the model differs from `{maas_model}`, change `maas_model` in `content/antora.yml` on an event branch.
+* The Web Terminal stops when idle and loses its home directory; participants re-run the setup block on the
+  prerequisites page.
+* ZTVP's Compliance Operator remediation sets `accessTokenInactivityTimeout: 10m` on the cluster OAuth config, so a
+  Web Terminal left idle for 10 minutes answers `Unauthorized` until it is reopened. Check with
+  `oc get oauth cluster -o jsonpath='{.spec.tokenConfig}'`.
+* The chart repository is third-party and still changing. The guide pins chart {chart_version}; check
+  `helm search repo openshell-ztm-demo -l` before an event.
+
+== Remove the prerequisites
+
+After the lab, as cluster-admin, look before you delete:
+
+[source,bash]
+----
+oc get subscription web-terminal -n openshift-operators -o jsonpath='{.metadata.labels}'
+oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
+----
+
+Remove the Web Terminal Subscription only if it carries `app.kubernetes.io/part-of: openshell-lab`. Remove the
+`openshell-lab-htpasswd` identity provider entry, the Secret of the same name in `openshift-config`, and the
+ClusterRoleBinding `openshell-lab-participant`. The chart leaves the Vault role and policy `openshell-admin` and
+the NetworkPolicy `allow-openshell-to-vault` in `vault`; remove them with `vault delete auth/hub/role/openshell-admin`
+and `vault policy delete openshell-admin` in `vault-0`, and `oc delete networkpolicy allow-openshell-to-vault -n vault`.

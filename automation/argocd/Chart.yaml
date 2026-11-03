@@ -1,0 +1,5 @@
+apiVersion: v2
+name: openshell-lab
+description: RHDP field content for the OpenShell on Zero Trust lab
+type: application
+version: 0.1.0

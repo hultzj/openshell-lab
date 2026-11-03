@@ -1,0 +1,12 @@
+# xreview configuration for openshell-lab.
+[gate]
+checks = [
+  { name = "antora-build", cmd = "npm run build" },
+  { name = "check-lab",    cmd = "bash scripts/check-lab.sh" },
+  { name = "shell-syntax", cmd = "bash -n automation/verify.sh && bash -n automation/participant-user.sh && bash -n scripts/check-lab.sh" },
+  { name = "participant-user-test", cmd = "bash automation/tests/participant-user-test.sh" },
+  { name = "gitleaks",     cmd = "gitleaks dir . --no-banner --redact" },
+]
+
+[review]
+max_diff_bytes = 400000

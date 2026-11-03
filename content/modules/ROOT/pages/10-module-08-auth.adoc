@@ -1,0 +1,171 @@
+= Module 8: User authentication
+:navtitle: Module 8: User authentication
+
+So far nobody has asked who you are: every CLI call reached the gateway anonymously. This module
+answers: *does the gateway verify user identity, and what does it accept?*
+
+You will see what anonymous callers get, sign in as a Keycloak user with the device flow, find out why
+the first token is rejected, fix the client, and see authorization apply to the signed-in user.
+
+.New to OIDC tokens?
+[%collapsible]
+====
+* *JWT* — a signed JSON token; the gateway checks its signature, issuer, audience and expiry.
+* *`aud` (audience)* — the service a token is meant for; the gateway requires `openshell-gateway`.
+* *`azp` (authorized party)* — the client that requested the token; it is not an audience.
+* *Device flow* — sign-in for terminals: the CLI shows a URL and code, you approve in a browser.
+* *Protocol mapper* — a Keycloak client setting that adds a claim, here the audience, to tokens.
+====
+
+== Technical context
+
+The gateway runs with OIDC enabled (issuer `https://keycloak.{cluster_domain}/realms/{keycloak_realm}`,
+audience `openshell-gateway`) and with `allow_unauthenticated_users = true`, which the demo chart sets so
+the lab can start without logging in. A CLI gateway registered with `--oidc-issuer` sends a bearer token on
+every call; the gateway checks the signature against Keycloak's keys, the issuer, the audience and the expiry.
+
+== Learning objectives
+
+* Show what identity and roles an anonymous caller receives.
+* Sign in to the gateway with the OIDC device flow and read the verified identity.
+* Explain why a token without an `aud` claim is rejected, and fix the client.
+* Distinguish authentication (who you are) from authorization (what your roles allow).
+
+== Exercise 1: What does an anonymous caller get?
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell whoami
+----
+
+Expected result: `Subject: unauthenticated-local-dev`, `Provider: local_dev`, `Roles: openshell-user,
+openshell-admin`. Anyone who can reach the gateway is an administrator, which is why Module 1 removed the public Route and
+added a NetworkPolicy. In production you remove anonymous access itself.
+
+== Exercise 2: Create a Keycloak user and enable the device flow
+
+The chart's client does not allow the device grant, which a browserless terminal needs. These Keycloak Admin
+REST calls create the user `demo-engineer` with a random password (any earlier `demo-engineer` is replaced, so
+the block is safe to re-run) and turn the grant on.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+kc_admin() {
+  local pw; pw=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+  curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$pw" -d grant_type=password | jq -r .access_token
+}
+ADMIN_TOKEN=$(kc_admin)
+CLIENT_UUID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id')
+OLD_ID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users?username=demo-engineer&exact=true" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id // empty')
+[ -n "$OLD_ID" ] && curl -sk -o /dev/null -X DELETE "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users/$OLD_ID" -H "Authorization: Bearer $ADMIN_TOKEN"
+DEMO_PW=$(openssl rand -hex 8)
+jq -n --arg pw "$DEMO_PW" '{username:"demo-engineer",enabled:true,email:"demo-engineer@example.com",emailVerified:true,firstName:"Demo",lastName:"Engineer",credentials:[{type:"password",value:$pw,temporary:false}]}' \
+  | curl -sk -o /dev/null -w "create user: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users"
+echo "demo-engineer password: $DEMO_PW"
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.attributes["oauth2.device.authorization.grant.enabled"] = "true"' \
+  | curl -sk -o /dev/null -w "enable device grant: HTTP %\{http_code}\n" -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID"
+----
+
+Expected result: `create user: HTTP 201`, `demo-engineer password: ` followed by 16 hexadecimal characters (keep it for
+Exercise 3; it exists only in your shell and in Keycloak), and `enable device grant: HTTP 204`.
+
+== Exercise 3: Sign in, and see the token rejected
+
+Register the gateway as OIDC-protected. Registering also signs you in. `OPENSHELL_NO_BROWSER=1` makes the CLI
+use the device flow; without it, the CLI waits for a browser callback on the terminal pod that your browser cannot reach.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+export OPENSHELL_NO_BROWSER=1
+openshell gateway add "$OPENSHELL_GATEWAY_ENDPOINT" --name ztm-demo \
+  --oidc-issuer "$KEYCLOAK_URL/realms/{keycloak_realm}" \
+  --oidc-client-id openshell-gateway --oidc-audience openshell-gateway --gateway-insecure < /dev/null
+----
+
+The CLI prints `✓ Gateway 'ztm-demo' added`, then `To authenticate, visit:` and a URL ending in `user_code=…`, and waits.
+
+. Open the URL in a new browser tab.
+. Log in as `demo-engineer` with the password printed in Exercise 2 (run `echo $DEMO_PW` if it scrolled away).
+. On *Grant Access to OpenShell Gateway*, click *Yes*.
+
+Expected result: the browser shows *Device Login Successful* and the terminal prints `✓ Authenticated via device code`.
+Keycloak issued a token. Now use it:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+Expected result: `whoami requires authentication` with `invalid token: Missing required claim: aud`. The gateway
+refused the token Keycloak issued.
+
+video::m8-device-login.mp4[width=960,title="Device-flow sign-in to the gateway (recorded on a lab cluster)"]
+
+== Exercise 4: Add the audience and sign in again
+
+Keycloak puts the requesting client in `azp`, not in `aud`. An audience mapper adds `openshell-gateway` to `aud`.
+Then sign in again; approve the new code in the browser as before (you may not need to type the password).
+
+[source,bash,role="execute",subs="attributes+"]
+----
+ADMIN_TOKEN=$(kc_admin)
+curl -sk -o /dev/null -w "audience mapper: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"openshell-gateway-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.client.audience":"openshell-gateway","access.token.claim":"true","id.token.claim":"false"}}' \
+  "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID/protocol-mappers/models"
+openshell gateway login ztm-demo
+----
+
+Expected result: `audience mapper: HTTP 201`, a new `user_code` URL, and after you approve,
+`✓ Authenticated to gateway 'ztm-demo' as demo-engineer`.
+
+Read the identity the gateway verified:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+Expected result: `Name: demo-engineer`, `Provider: oidc` and empty `Roles`: the gateway checked the token's
+signature, issuer and audience and took the identity from it.
+
+== Exercise 5: Authenticated is not authorized
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo sandbox list; echo "exit=$?"
+----
+
+Expected result: `role 'openshell-user' required` and `exit=1`. The gateway knows who `demo-engineer` is, and
+that user holds no OpenShell role, so it is refused, while an anonymous caller is an administrator. In
+production you set `allowUnauthenticatedUsers: false` and map Keycloak roles with `rolesClaim`, `userRole` and `adminRole`.
+
+Finally, remove the OIDC registration so the next module uses the lab's anonymous access again:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell gateway remove ztm-demo
+openshell sandbox list
+----
+
+Expected result: `Gateway registration 'ztm-demo' removed.`, then `{sandbox_name}` `Ready` as in Module 2.
+
+IMPORTANT: While `ztm-demo` is registered, the CLI applies OIDC to the gateway even when you use the
+`OPENSHELL_GATEWAY_ENDPOINT` variable, and Module 9 fails with `OIDC credentials are missing`.
+
+== Evidence checkpoint
+
+* Which token claim did the gateway check that Keycloak did not set by default?
+* Why is an OIDC-enabled gateway still open in this lab?
+
+.Answer key
+[%collapsible]
+====
+* `aud`. Keycloak named the client in `azp`; the gateway requires `openshell-gateway` in `aud` and rejected
+  the token until the audience mapper added it.
+* `allow_unauthenticated_users = true` gives callers without a token the `local_dev` identity with the admin
+  role. OIDC only adds verified identities on top; it does not remove the anonymous path.
+====
+
+Proceed to xref:11-module-09-policy.adoc[Module 9: Dynamic policy].

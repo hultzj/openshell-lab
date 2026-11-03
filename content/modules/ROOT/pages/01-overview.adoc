@@ -1,0 +1,130 @@
+= Architecture and Control Boundaries
+:navtitle: Architecture and Control Boundaries
+
+This page has no commands. It explains how the pieces fit, so that every later result makes sense.
+
+== Control questions
+
+Each module answers one of these with evidence you collect yourself:
+
+* *Can the agent send data to a host we did not approve?* (Module 4)
+* *Can the agent read or change files outside its working directory, even as root?* (Module 5)
+* *Can the agent see, print or leak our LLM API key?* (Module 6)
+* *Where does the key live, who syncs it, and how is the workload identified?* (Module 7)
+* *Can we require a real user identity for gateway access?* (Module 8)
+* *Can we change what an agent may reach without redeploying it?* (Module 9)
+
+== The stack
+
+[cols="1,2,3",options="header"]
+|===
+| Layer | Component | Responsibility
+
+| Platform
+| OpenShift (single node, on AWS)
+| Runs everything; Developer Catalog, Routes, Web Terminal
+
+| ZTVP
+| HashiCorp Vault (`vault`)
+| Stores the MaaS API key, encrypted, at `secret/hub/infra/openshell/maas`
+
+| ZTVP
+| External Secrets Operator (`external-secrets-operator`)
+| Syncs the key from Vault into a Kubernetes Secret for the gateway
+
+| ZTVP
+| Zero Trust Workload Identity Manager, SPIFFE/SPIRE (`zero-trust-workload-identity-manager`)
+| Issues workload identities (SVIDs) to OpenShell pods
+
+| ZTVP
+| Advanced Cluster Security (`stackrox`)
+| Scans images and enforces deploy and runtime policy
+
+| ZTVP
+| Red Hat build of Keycloak (`keycloak-system`)
+| Authenticates users and issues OIDC tokens for the gateway client
+
+| Application
+| OpenShell gateway (`openshell-system`)
+| gRPC API for the CLI; manages sandboxes, providers and policies
+
+| Application
+| OpenShell supervisor
+| Runs outside the agent's process tree; enforces the network boundary and swaps resolver tokens for real credentials
+
+| Application
+| Sandbox `pi-agent-demo`
+| The container the Pi agent runs in, under the network and Landlock policies
+|===
+
+== The one distinction to understand
+
+A Kubernetes NetworkPolicy decides which *pods* may talk to which addresses. An OpenShell network
+policy decides which *program inside the sandbox* may reach which *host name*: `curl` may call the
+MaaS API, `npm` may call the npm registry, and nothing else may reach anything. The sandbox resolves
+every unlisted host to a placeholder address and the supervisor refuses the connection, so a denied
+call fails in milliseconds instead of timing out.
+
+The credential works the same way. Inside the sandbox, `MAAS_API_KEY` is a resolver token. Only the
+supervisor, outside the agent's reach, swaps it for the real key, and only for requests to the
+endpoint the provider is bound to.
+
+The request path is:
+
+[cols="1,3",options="header"]
+|===
+| Hop | What happens
+
+| 1. CLI → gateway Service
+| `openshell sandbox exec` sends gRPC over HTTPS to the gateway's in-cluster Service (no public Route; a NetworkPolicy admits only the lab and Web Terminal namespaces)
+| 2. Gateway
+| The gateway finds the sandbox and forwards the command
+| 3. Gateway → supervisor → sandbox
+| The supervisor runs the command inside the sandbox, with the policy applied
+| 4. Sandbox → boundary
+| Every outbound connection is checked against the host and binary allowlist
+| 5. Boundary → MaaS
+| For allowed MaaS calls, the resolver token is replaced by the real key from Vault
+|===
+
+== Lab progression
+
+=== 1. Deploy OpenShell from the catalog
+Register the chart repository, install the release with your MaaS key, and watch the hooks seed
+Vault, create the sandbox and register the Keycloak client.
+
+=== 2. Connect the OpenShell CLI
+Point the CLI at the gateway Service, list sandboxes, and confirm nobody outside can reach the gateway.
+
+=== 3. AI agent coding with Pi
+Ask Pi for a script and a small REST API, then run them inside the sandbox.
+
+=== 4. Network zero trust
+Call allowed and unlisted hosts, and compare the results and timings.
+
+=== 5. Filesystem zero trust
+Write where the policy allows, then try `/etc`, `/usr` and `/`.
+
+=== 6. Credential security
+Print the key inside the sandbox, use it through the boundary, and try it against another endpoint.
+
+=== 7. ZTVP integration
+Read the Vault-backed ExternalSecret, the ClusterSPIFFEID, ACS Central and the Keycloak client.
+
+=== 8. User authentication
+Create a Keycloak user, request a token for the gateway client and decode its claims.
+
+=== 9. Dynamic policy
+Allow `pypi.org` on the running sandbox, prove it works, then revoke it.
+
+== Interpretation guardrails
+
+* The lab shows one sandbox with one policy. It does not measure the overhead of the boundary or its
+  behavior under load.
+* The demo gateway accepts unauthenticated CLI calls so the lab can start quickly. Module 8 shows how
+  OIDC is wired, not a gateway that rejects anonymous callers.
+* The sandbox runs as a pod on the cluster; a container escape is outside what the lab tests.
+* OpenShell, the Pi agent image and the demo chart are upstream and community components, not Red Hat
+  supported products. See xref:91-reference.adoc[Technical Reference].
+
+Continue with xref:02-details.adoc[Prerequisites and Environment].

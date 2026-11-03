@@ -1,0 +1,114 @@
+= Prerequisites and Environment
+:navtitle: Prerequisites and Environment
+
+== What you need
+
+[cols="1,2",options="header"]
+|===
+| If you are… | You need
+
+| Every participant
+| A browser, the OpenShift user `{lab_user}` and its password, and a Red Hat MaaS API key (`sk-…`)
+
+| Facilitator
+| A cluster prepared as in xref:92-facilitator-guide.adoc[Facilitator Guide]
+|===
+
+Provided by the facilitator:
+
+* The OpenShift web console URL (shown in the Access details table below).
+* The password for `{lab_user}`, an OpenShift user with cluster-admin rights on this dedicated cluster.
+* A MaaS API key that can use the model `{maas_model}`.
+
+The cluster already runs the Zero Trust Validated Pattern (Vault, External Secrets Operator, Keycloak,
+SPIFFE/SPIRE, Advanced Cluster Security) and the OpenShift Web Terminal. You do not deploy any of them.
+
+IMPORTANT: This lab installs a custom resource definition and a cluster-scoped Helm chart repository,
+and reads the Keycloak admin secret. That is why you use a cluster-admin user, and why the Showroom
+page has no built-in terminal: anyone with the Showroom URL could use it.
+
+== Open the Web Terminal
+
+All commands in this lab run in the OpenShift Web Terminal, a shell in your browser that is already
+logged in as you.
+
+. Open the console: link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^].
+. On the login page, click *openshell-lab-htpasswd*, then log in as `{lab_user}`.
+. In the masthead, click the *Command line terminal* icon (`>_`).
+. Under *Initialize terminal*, leave *Project* as `openshift-terminal` and click *Start*.
+
+Expected result: a panel titled *OpenShift command line terminal* opens with the prompt `bash-5.1 ~ $`.
+
+image::02-web-terminal.png[The OpenShift console with the command line terminal open at the bottom, showing the bash prompt]
+
+NOTE: The Web Terminal stops after a period of inactivity and its home directory is not kept. If your
+terminal restarts, run the setup block below again. It is safe to re-run. This cluster's
+compliance settings also expire a login after 10 minutes without activity: if `oc` reports `Unauthorized`, close the
+terminal panel and open it again from the masthead (reload the console page first if needed), then run the setup block.
+
+== Set up your terminal
+
+This block installs the OpenShell CLI {openshell_version} (the same version as the gateway), verifies
+its checksum, points the CLI at the gateway's in-cluster Service (the Web Terminal runs inside the cluster), and adds
+the chart repository to Helm.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+mkdir -p ~/bin && cd /tmp
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-x86_64-unknown-linux-musl.tar.gz
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-checksums-sha256.txt
+grep ' openshell-x86_64-unknown-linux-musl.tar.gz$' openshell-checksums-sha256.txt | sha256sum -c - \
+  && tar -xzf openshell-x86_64-unknown-linux-musl.tar.gz -C ~/bin openshell; cd ~
+cat > ~/.openshell-lab.env <<'ENV'
+export PATH=$HOME/bin:$PATH
+export OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080
+export OPENSHELL_GATEWAY_INSECURE=true
+ENV
+grep -q openshell-lab.env ~/.bashrc || echo 'source ~/.openshell-lab.env' >> ~/.bashrc
+source ~/.openshell-lab.env
+helm repo add openshell-ztm-demo {chart_repo_url} --force-update >/dev/null
+openshell --version
+----
+
+Expected result: `openshell-x86_64-unknown-linux-musl.tar.gz: OK` (the download matches the published
+checksum), then `openshell {openshell_version}`. The archive is extracted only when the checksum matches; on a
+mismatch you see `FAILED` and no `openshell` binary.
+
+== Run the pre-flight check
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc whoami
+oc auth can-i create customresourcedefinitions
+oc auth can-i get secrets -n keycloak-system
+oc get pods -n vault vault-0 --no-headers
+oc get clustersecretstore vault-backend --no-headers
+----
+
+Expected result: `{lab_user}`, then `yes` twice (the CRD warning about cluster scope is harmless),
+`vault-0` with `1/1 Running`, and `vault-backend` with `Valid` and `True`. Vault and the ClusterSecretStore
+are the ZTVP services the chart plugs into; if either is missing, stop and tell your facilitator.
+
+== Access details
+
+[cols="1,2",options="header"]
+|===
+| Setting | Value
+
+| OpenShift console
+| link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^]
+
+| Lab namespace
+| `{lab_namespace}`
+
+| Helm release
+| `{release_name}`
+
+| Sandbox
+| `{sandbox_name}`
+
+| MaaS endpoint and model
+| `https://{maas_host}/v1`, `{maas_model}`
+|===
+
+Proceed to xref:03-module-01-deploy.adoc[Module 1: Deploy OpenShell from the catalog].

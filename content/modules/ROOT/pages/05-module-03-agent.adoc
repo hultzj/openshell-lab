@@ -1,0 +1,120 @@
+= Module 3: AI agent coding with Pi
+:navtitle: Module 3: AI agent coding
+
+Before restricting an agent, see what it can do. This module answers: *is this a real agent, or a
+mock-up?* Pi asks the MaaS LLM for code, writes files, installs packages and runs them, all inside
+the sandbox.
+
+You will give Pi two prompts, run what it built, and check which credential it was holding.
+
+.New to agentic coding?
+[%collapsible]
+====
+* *Agent* — a program that turns a prompt into actions (write a file, run a command), not only text.
+* *Pi* — the coding agent used here (version {pi_version}), configured for the MaaS provider.
+* *MaaS* — Red Hat Model-as-a-Service, an OpenAI-compatible API; this lab uses the model `{maas_model}`.
+* *Resolver token* — a placeholder the sandbox holds instead of the real API key.
+====
+
+== Technical context
+
+`openshell sandbox exec {sandbox_name} < /dev/null -- <command>` runs a command in the sandbox through the gateway
+and supervisor. Pi reads `/sandbox/.pi/agent/models.json`, which names the MaaS endpoint, the model and
+the key `$MAAS_API_KEY`. Every outbound call Pi makes (to MaaS, to the npm registry) passes the
+supervisor's network boundary.
+
+IMPORTANT: Every `openshell sandbox exec` in this lab ends its options with `< /dev/null`. The CLI forwards your
+terminal's input into the sandbox, so without it a running `exec` swallows the next lines of a pasted block and
+those commands never run.
+
+== Learning objectives
+
+* Run Pi non-interactively in the sandbox and find the files it created.
+* Run the generated code inside the sandbox.
+* Show that the sandbox's `MAAS_API_KEY` is a resolver token, not a key.
+
+== Exercise 1: Ask Pi for a script
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi --version
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create a Node.js script that prints Hello from the Zero Trust sandbox"
+----
+
+Expected result: `{pi_version}`, then within a few seconds Pi reports that it created a file such as
+`/sandbox/hello.js` and shows the output `Hello from the Zero Trust sandbox`.
+
+NOTE: The LLM chooses file names and wording, so your output differs in detail. If Pi returns nothing,
+run the same command again.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'ls /sandbox; for f in /sandbox/*.js; do node "$f"; done'
+----
+
+Expected result: the listing includes the `.js` file Pi reported, and running it prints
+`Hello from the Zero Trust sandbox`.
+
+== Exercise 2: Ask Pi for a REST API, then test it
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js REST API listening on port 3000 with GET /health returning {status: ok}, GET /items returning 3 sample items, and POST /items to add an item."
+----
+
+Expected result: Pi reports a `package.json` and a server file (`server.js`, `index.js` or `app.js` in the lab
+runs), and usually that it installed dependencies, started the server and tested the endpoints.
+
+video::m3-pi-agent.mp4[width=960,title="Pi writing and running code in the sandbox (recorded on a lab cluster)"]
+
+Pi often leaves its server running, and sometimes puts the project in a subdirectory such as
+`/sandbox/express-api`. The block below finds the directory with `package.json`, stops any running `node`
+process, installs dependencies, starts the server file Pi named, and calls each endpoint:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+D=$(dirname "$(find /sandbox -maxdepth 2 -name package.json -not -path "*/node_modules/*" | head -1)"); echo "project: $D"
+cd "$D" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
+for APP in "$(node -p "require(\"./package.json\").main || \"\"")" server.js index.js app.js; do [ -f "$APP" ] && break; done
+node "$APP" & sleep 3
+curl -s localhost:3000/health; echo
+curl -s localhost:3000/items; echo
+curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\"price\":9.99}" localhost:3000/items; echo
+pkill -x node'
+----
+
+Expected result: `project: /sandbox` or a subdirectory, `npm install` ends with a package count or `up to date`
+(it reached `registry.npmjs.org`), `/health`
+returns `{"status":"ok"}`, `/items` returns three items, and the POST returns the new item with an `id`.
+The exact fields are whatever the model generated.
+
+NOTE: `pkill -x node` matches the process name exactly. `pkill -f "node index.js"` would also match the
+shell running it and end your command early.
+
+== Exercise 3: Check which credential Pi used
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- printenv MAAS_API_KEY
+----
+
+Expected result: a value that starts with `openshell:resolve:env:` and ends with `_MAAS_API_KEY`, not
+`sk-…`. Pi called MaaS successfully while holding only this placeholder.
+
+In short: the agent is fully capable, and it never held the real key. Modules 4 to 6 test what it
+cannot do.
+
+== Evidence checkpoint
+
+* Which two external hosts did Pi's work depend on in this module?
+* Where did the real key get attached to Pi's requests?
+
+.Answer key
+[%collapsible]
+====
+* `{maas_host}` for code generation, and `registry.npmjs.org` for `npm install`.
+* At the supervisor's boundary, outside the sandbox. Module 6 proves the placeholder is useless anywhere else.
+====
+
+Proceed to xref:06-module-04-network.adoc[Module 4: Network zero trust].

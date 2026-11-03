@@ -1,0 +1,14 @@
+---
+type: showroom
+
+default_width: 30
+persist_url_state: true
+
+view_switcher:
+  enabled: true
+  default_mode: split
+
+# No tabs: the Showroom terminal is off (the lab needs cluster-admin, and the Showroom URL has no
+# login), and a default OpenShift console refuses framing. Participants use the console's Web
+# Terminal, linked from the guide.
+tabs: []

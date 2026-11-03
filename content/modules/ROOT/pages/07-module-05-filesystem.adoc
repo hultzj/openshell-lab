@@ -1,0 +1,120 @@
+= Module 5: Filesystem zero trust
+:navtitle: Module 5: Filesystem zero trust
+
+An agent that can write anywhere can plant a binary, change DNS settings, or drop a backdoor where
+nothing looks. This module answers: *can the agent read or write outside the paths we allowed, and is
+the kernel, not ordinary file permissions, what stops it?*
+
+You will write where the policy allows, try paths it does not, and then separate Landlock from plain
+Unix permissions with one comparison.
+
+.New to Landlock?
+[%collapsible]
+====
+* *Landlock* — a Linux security module (since kernel 5.13) that lets a process restrict its own file access; the kernel enforces it.
+* *LSM* — Linux Security Module, the kernel framework that SELinux and Landlock plug into.
+* *DAC* — discretionary access control: ordinary owner/group/other permission bits.
+* *EACCES* — the "Permission denied" error the kernel returns.
+====
+
+== Technical context
+
+The sandbox policy, as the gateway reports it (`openshell policy get {sandbox_name} --full`):
+
+[source,yaml]
+----
+filesystem_policy:
+  read_only:  [/bin, /usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+----
+
+Everything else is invisible to the agent. `best_effort` means the sandbox would start even on a kernel
+without Landlock, so the last exercise proves that Landlock is actually enforcing on this cluster.
+
+The agent runs as an OpenShift-assigned, non-root UID. That matters: `/etc` and `/usr` are owned by root,
+so ordinary permissions would also stop some writes there. Exercise 3 uses a path where ordinary
+permissions *allow* the write.
+
+== Learning objectives
+
+* Show reads and writes succeeding in the allowed paths.
+* Show writes and listings failing outside them.
+* Prove that Landlock, not DAC, causes the denial.
+
+== Exercise 1: Use the allowed paths
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo "This is allowed" > /sandbox/test.txt && cat /sandbox/test.txt
+echo "Temp file" > /tmp/test.txt && cat /tmp/test.txt
+ls /usr/bin/node; cat /etc/hostname'
+----
+
+Expected result: `This is allowed`, `Temp file`, `/usr/bin/node`, and the hostname `default--{sandbox_name}`.
+
+== Exercise 2: Try the denied paths
+
+NOTE: Every command below fails with `Permission denied`. This is expected.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo hacked > /etc/test; cp /dev/null /usr/bin/node; touch /etc/shadow
+ls /; mkdir -p /home/sandbox; ls /opt'
+----
+
+Expected result: `/etc/test: Permission denied`, `cannot create regular file '/usr/bin/node': Permission
+denied`, `cannot touch '/etc/shadow': Permission denied`, `cannot open directory '/': Permission denied`,
+`cannot create directory '/home/sandbox': Permission denied`, and `cannot open directory '/opt':
+Permission denied`.
+
+== Exercise 3: Prove it is Landlock
+
+`/tmp`, `/var/tmp` and `/dev/shm` have the same permission bits: world-writable with the sticky bit.
+Ordinary permissions treat them identically. Only `/tmp` is in the policy.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+stat -c "%A %U %n" / /tmp /var/tmp /dev/shm
+for d in /tmp /var/tmp /dev/shm; do echo probe > $d/probe && echo "$d: write OK" || echo "$d: write DENIED"; done'
+----
+
+Expected result: `/tmp`, `/var/tmp` and `/dev/shm` all show `drwxrwxrwt root`, and `/` shows
+`dr-xr-xr-x` (anyone may list it). Then `/tmp: write OK`, `/var/tmp: write DENIED` and `/dev/shm: write
+DENIED`. Same permissions, different outcome: the kernel's Landlock ruleset is the only difference. The
+same holds for `ls /` in Exercise 2, which DAC would allow.
+
+In short: the agent sees two writable directories, and the kernel enforces it even where Unix permissions would not.
+
+.The scripted assertion for this exercise
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /tmp/probe' >/dev/null 2>&1 || { echo "FAIL: /tmp not writable"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /var/tmp/probe' >/dev/null 2>&1 && { echo "FAIL: /var/tmp writable, Landlock not enforcing"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== Evidence checkpoint
+
+* Why is the `/etc/test` denial on its own weak evidence for Landlock here?
+* What does `compatibility: best_effort` imply for a cluster with an older kernel?
+
+.Answer key
+[%collapsible]
+====
+* `/etc` is owned by root and the agent's UID is not root, so ordinary permissions would refuse that write too.
+  The `/var/tmp` and `/dev/shm` results, and `ls /`, are denials that only Landlock explains.
+* The sandbox would start without filesystem restrictions. Run the Exercise 3 check on any new cluster before
+  relying on the policy.
+====
+
+Proceed to xref:08-module-06-credentials.adoc[Module 6: Credential security].

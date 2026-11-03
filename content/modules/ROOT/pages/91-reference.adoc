@@ -1,0 +1,102 @@
+= Technical Reference
+:navtitle: Technical Reference
+
+== What each project contributes
+
+[cols="1,3",options="header"]
+|===
+| Project | Use it for
+
+| link:https://github.com/NVIDIA/OpenShell[NVIDIA OpenShell^] {openshell_version}
+| Gateway, supervisor, sandbox runtime, network and Landlock policy, credential providers, CLI
+| link:https://github.com/avijra/openshell-ztm-demo-chart[openshell-ztm-demo chart^] {chart_version}
+| Wraps the OpenShell chart; adds the Vault seed Job, ExternalSecret, ClusterSPIFFEID, Keycloak client Job and the Pi sandbox
+| link:https://github.com/validatedpatterns/layered-zero-trust[Zero Trust Validated Pattern^]
+| Vault, External Secrets Operator, Red Hat build of Keycloak, Zero Trust Workload Identity Manager (SPIRE), ACS, cert-manager, ACM
+| link:https://pi.dev/[Pi^] {pi_version}
+| The coding agent under test
+| link:https://docs.kernel.org/userspace-api/landlock.html[Landlock^]
+| Kernel-enforced filesystem restrictions
+| link:https://avijra.github.io/openshell-ztm-lab/[OpenShell on Zero Trust demo lab^]
+| The original lab this guide is rebuilt from
+|===
+
+== Evidence interpretation
+
+[cols="1,2,2",options="header"]
+|===
+| Topic | Supported interpretation | Required evidence
+
+| Egress allowlist
+| Unlisted hosts are refused before any packet reaches them
+| `curl: (7) … after 1 ms`, `198.18.0.x` resolution, OCSF `DENIED` events (Module 4)
+| Per-binary rules
+| The same host can be allowed for one executable and refused for another
+| `node -> github.com ERR EACCES` with `curl` allowed (Modules 4 and 9)
+| Landlock
+| The kernel, not file permissions, blocks writes outside the policy
+| `/var/tmp` and `/dev/shm` denied with the same mode as writable `/tmp` (Module 5)
+| Credential isolation
+| The sandbox never holds the key; the placeholder works only through the boundary
+| `HTTP 200` inside, `HTTP 401` outside for the same token (Module 6)
+| Vault and ESO
+| The key is stored in Vault and synced back by External Secrets
+| ExternalSecret `SecretSynced True` with remote key `hub/infra/openshell/maas` (Modules 1 and 7)
+| Gateway OIDC
+| The gateway verifies signature, issuer and audience, and applies roles
+| `Missing required claim: aud`, then `demo-engineer` authenticated but `role 'openshell-user' required` (Module 8)
+| Live policy
+| Policy changes apply without restarting the sandbox
+| New version `loaded`, `restarts=0` (Module 9)
+|===
+
+== What this lab does not prove
+
+* *Gateway access control.* The demo chart sets `allowUnauthenticatedUsers: true`, so anonymous callers are
+  administrators. The lab limits who can reach the gateway (no Route, a NetworkPolicy); Module 8 shows token
+  verification, not a gateway that rejects anonymous callers.
+* *Use of SPIFFE identities.* SPIRE registers identities for OpenShell's service accounts, but no OpenShell pod
+  mounts the SPIFFE CSI volume, and the chart's own ClusterSPIFFEID uses a class SPIRE ignores.
+* *Least privilege in Vault.* The chart's installer Job runs `vault` inside `vault-0` and creates the role
+  `openshell-admin` bound to every service account in `{lab_namespace}`, with `delete` rights. The lab shows this
+  (Module 7); it does not fix it. If the seed Job cannot log in, it falls back to a Kubernetes Secret and still succeeds.
+* *Behavior under load, or isolation against a container escape.* The lab runs one sandbox and tests policy, not
+  the container runtime.
+* *Support status.* OpenShell, the demo chart and the Pi image are upstream or community components, not Red Hat
+  supported products.
+
+// NOT-IN-DOCS: the chart issuer/CA overrides, the Keycloak device grant and audience mapper, and the OIDC
+// gateway-registration flow follow the OpenShell chart's values and CLI help (v0.1.6), not Red Hat product docs.
+
+== Changes from the original lab
+
+[cols="2,3",options="header"]
+|===
+| Original | This guide, and why
+
+| Bastion over SSH
+| OpenShift Web Terminal as a cluster-admin user; no bastion on this cluster
+| `helm install … --set maas.apiKey=…` only
+| Adds `--version`, `maas.model`, the Keycloak issuer and CA: the chart's default issuer is another cluster, and this cluster's routes are not publicly signed
+| Gateway on a public Route
+| In-cluster Service plus the NetworkPolicy `gateway-ingress`: the demo gateway makes anonymous callers administrators, so it must not be reachable from the internet
+| `python3` for JSON
+| `jq` (the Web Terminal has no Python)
+| HelmChartRepository `Ready=True`
+| `helm search` and the catalog tile (no status on OpenShift {ocp_version})
+| "`aud` = openshell-gateway"
+| Observed: Keycloak sets no `aud` by default; Module 8 adds the audience mapper
+| Writes to `/etc` as proof of Landlock
+| Adds the `/var/tmp` vs `/tmp` comparison, since `/etc` is also protected by file ownership
+| `pkill -f "node index.js"`
+| `pkill -x node`, which cannot match its own shell
+|===
+
+== Sources and further reading
+
+* Module 1: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/building_applications/working-with-helm-charts[OpenShift: Working with Helm charts^]
+* Prerequisites: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/web_console/web-terminal[OpenShift: Web terminal^]
+* Module 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/zero-trust-workload-identity-manager[Zero Trust Workload Identity Manager^]
+* Module 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/external-secrets-operator-for-red-hat-openshift[External Secrets Operator for Red Hat OpenShift^]
+* Module 8: link:https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.4/html/server_administration_guide/managing_openid_connect_and_saml_clients[Red Hat build of Keycloak: managing OIDC clients^]
+* link:https://validatedpatterns.io/patterns/layered-zero-trust/[Layered Zero Trust pattern documentation^]

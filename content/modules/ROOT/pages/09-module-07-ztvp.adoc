@@ -1,0 +1,150 @@
+= Module 7: ZTVP integration
+:navtitle: Module 7: ZTVP integration
+
+A security platform is only useful if applications actually consume it. This module answers: *which
+ZTVP services does OpenShell use on this cluster, and which ones only stand ready?*
+
+You will follow the key from Vault to the gateway, find the workload identities SPIRE issued, open ACS,
+and read the Keycloak client the chart registered.
+
+.New to the ZTVP services?
+[%collapsible]
+====
+* *Vault* — encrypted secret storage with per-path policies.
+* *External Secrets Operator (ESO)* — copies values from Vault into Kubernetes Secrets on a schedule.
+* *SPIFFE ID / SVID* — a workload's identity, `spiffe://<trust domain>/ns/<namespace>/sa/<service account>`, and the certificate that proves it.
+* *ClusterSPIFFEID* — the resource that tells SPIRE which pods get which ID.
+* *ACS* — Red Hat Advanced Cluster Security, which scans images and enforces deploy and runtime policy.
+====
+
+== Technical context
+
+[cols="1,2,2",options="header"]
+|===
+| Service | What OpenShell uses | Evidence in this module
+
+| Vault
+| Stores the MaaS key; the chart's seed Job writes it
+| Vault pod; ExternalSecret path
+| External Secrets
+| Syncs the key into `maas-api-key` hourly
+| ExternalSecret `SecretSynced`
+| SPIFFE/SPIRE
+| Registers an identity per service account
+| SPIRE entries for `{lab_namespace}`
+| ACS
+| Scans and watches every pod on the cluster, including the sandbox
+| Central route and pods
+| Keycloak
+| Issues tokens for the `openshell-gateway` client (Module 8)
+| Client settings
+|===
+
+== Learning objectives
+
+* Trace the key from Vault through External Secrets to a Kubernetes Secret.
+* Read the SPIFFE IDs SPIRE issued to OpenShell's service accounts, and say who uses them.
+* Locate ACS Central and the Keycloak client the chart created.
+
+== Exercise 1: Follow the key from Vault
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n vault -l app.kubernetes.io/name=vault
+oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.spec.data[0].remoteRef.key}{"\n"}'
+oc get clustersecretstore vault-backend -o jsonpath='{.spec.provider.vault.auth.kubernetes.mountPath} {.spec.provider.vault.auth.kubernetes.role}{"\n"}'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+oc get secret maas-api-key -n {lab_namespace} -o jsonpath='{.data.api_key}' | base64 -d | head -c 3; echo "..."
+----
+
+Expected result: `vault-0  1/1  Running`; the remote key `hub/infra/openshell/maas`; the store logs in on
+mount `hub` with role `hub-role`; the ExternalSecret shows `vault-backend`, `1h`, `SecretSynced`, `True`;
+and the Secret starts with `sk-`.
+
+In short: two Vault roles are involved: the chart's seed Job writes with `openshell-admin`, and ESO reads with ZTVP's `hub-role`.
+
+Now read the role the chart created for itself:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n vault vault-0 -- vault read -format=json auth/hub/role/openshell-admin \
+  | jq -c '.data | {bound_service_account_names, bound_service_account_namespaces, token_policies}'
+oc exec -n vault vault-0 -- vault policy read openshell-admin
+----
+
+Expected result: `"bound_service_account_names":["*"]` with namespace `{lab_namespace}` and policies `default` and
+`openshell-admin`; the policy grants `create`, `update`, `read`, `list` and `delete` under `secret/data/hub/infra/openshell/*`
+(and `secret/data/openshell/*`). Any service account in the namespace, including the sandbox's, may log in with
+it. The sandbox cannot use it in this lab: a `curl` from the sandbox to `vault.vault.svc` fails with exit code 7, and
+`/var/run/secrets` is outside its Landlock policy,
+but a production install should bind the role to `vault-seed-job` only and drop `delete`.
+
+== Exercise 2: Find the workload identities
+
+The chart ships a ClusterSPIFFEID named `openshell-gateway`. Check whether SPIRE acted on it:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get clusterspiffeid -o custom-columns=NAME:.metadata.name,CLASS:.spec.className,PODS:.status.stats.podsSelected
+----
+
+Expected result: `openshell-gateway` with class `openshift` and no pod count, next to ZTVP's
+`zero-trust-workload-identity-manager-spire-default` with class `zero-trust-workload-identity-manager-spire`
+and a pod count. SPIRE ignores the chart's entry because its class does not match.
+
+ZTVP's default entry gives every service account an identity anyway. Ask the SPIRE server:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n zero-trust-workload-identity-manager spire-server-0 -c spire-server -- \
+  /spire-server entry show -socketPath /tmp/spire-server/private/api.sock | grep -o 'spiffe://.*/ns/{lab_namespace}/.*' | sort -u
+oc get pods -n {lab_namespace} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.volumes[*].csi.driver}{"\n"}\{end}'
+----
+
+Expected result: IDs ending in `/ns/{lab_namespace}/sa/{release_name}` (the gateway), `/sa/{release_name}-sandbox`
+(the sandbox) and `/sa/openshell-setup`. The second command prints pod names with no `csi.spiffe.io` driver.
+SPIRE has registered the identities, but no OpenShell pod mounts the SPIFFE CSI volume, so nothing in this lab
+authenticates with an SVID yet.
+
+== Exercise 3: Open ACS Central
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n stackrox -l app=central --no-headers
+oc get route central -n stackrox -o jsonpath='https://{.spec.host}{"\n"}'
+----
+
+Expected result: one `central-…` pod `1/1 Running`, and the URL `https://central-stackrox.{cluster_domain}`.
+
+GUI view: open the URL. The login page reads *Select an auth provider* and offers *OIDC*: ACS authenticates
+users through ZTVP's Keycloak, the same identity provider the gateway uses in Module 8.
+
+== Exercise 4: Read the Keycloak client
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.[] | {clientId, publicClient, directAccessGrantsEnabled, redirectUris}'
+----
+
+Expected result: `"clientId": "openshell-gateway"`, `"publicClient": true`, `"directAccessGrantsEnabled": true`,
+and redirect URIs for the gateway's would-be Route hostname (not created in this lab) and `http://localhost:*/*`.
+
+== Evidence checkpoint
+
+* Which ZTVP services does OpenShell depend on to run in this lab, and which are defense in depth only?
+* What would have to change for the gateway to authenticate to Vault with its SPIFFE identity?
+
+.Answer key
+[%collapsible]
+====
+* Vault and External Secrets carry the key (with a broader Vault role than the job needs); Keycloak issues the gateway's user tokens (Module 8). SPIRE
+  identities and ACS observe and identify the workloads, but nothing in the request path depends on them yet.
+* The gateway pod would mount the SPIFFE CSI volume and Vault would trust SPIRE as a JWT or certificate auth
+  method; the chart would also need a ClusterSPIFFEID with the right class and service account.
+====
+
+Proceed to xref:10-module-08-auth.adoc[Module 8: User authentication].

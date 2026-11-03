@@ -1,0 +1,91 @@
+= Module 2: Connect the OpenShell CLI
+:navtitle: Module 2: Connect the CLI
+
+Every later module drives the sandbox through the gateway, so the CLI must reach it, and nobody else
+should. This module answers: *how does a client find and trust the gateway, and who else can reach it?*
+
+You will list sandboxes through the gateway's in-cluster Service, see what the CLI refuses, and check
+that the gateway is reachable neither from the internet nor from another namespace.
+
+.New to the OpenShell CLI?
+[%collapsible]
+====
+* *Gateway endpoint* — the HTTPS URL the CLI speaks gRPC to; here the gateway's Kubernetes Service.
+* *gRPC* — a binary remote-procedure-call protocol over HTTP/2.
+* *Insecure mode* — encrypted TLS without certificate validation, used because the gateway certificate comes from the chart's own CA.
+* *NetworkPolicy* — a Kubernetes rule that limits which pods may connect to which pods.
+====
+
+== Technical context
+
+The setup block on the prerequisites page wrote two variables to `~/.openshell-lab.env`:
+`OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080` (the Service; the
+endpoint must include `https://`) and `OPENSHELL_GATEWAY_INSECURE=true`. The Web Terminal runs in the cluster, so it
+reaches the Service directly. The path of a command is CLI → gateway Service (TLS) → gateway pod → supervisor →
+sandbox. In Module 1 you installed without a Route and added the NetworkPolicy `gateway-ingress`.
+
+== Learning objectives
+
+* List sandboxes through the gateway and read the sandbox phase.
+* Explain why the endpoint must include the scheme and why insecure mode is set.
+* Show that the gateway has no public endpoint and refuses connections from other namespaces.
+
+== Exercise 1: List sandboxes through the gateway
+
+[source,bash,role="execute",subs="attributes+"]
+----
+source ~/.openshell-lab.env
+echo "$OPENSHELL_GATEWAY_ENDPOINT"
+oc get service {release_name} -n {lab_namespace}
+openshell sandbox list
+----
+
+Expected result: the endpoint `https://{release_name}.{lab_namespace}.svc.cluster.local:8080`, the Service
+`{release_name}` of type `ClusterIP` with port `8080/TCP`, and the list shows `{sandbox_name}` with phase `Ready`.
+The CLI also prints a `WARN … TLS certificate verification is disabled` line; that is the insecure mode you set.
+
+== Exercise 2: See what the CLI refuses
+
+NOTE: Both commands below fail. This is expected: each shows one rule the CLI enforces.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+OPENSHELL_GATEWAY_ENDPOINT=${OPENSHELL_GATEWAY_ENDPOINT#https://} openshell sandbox list; echo "exit=$?"
+OPENSHELL_GATEWAY_INSECURE=false openshell sandbox list; echo "exit=$?"
+----
+
+Expected result: the first fails with `gateway URL must start with http:// or https://` and `exit=1`. The
+second fails with `failed to read TLS CA from …/mtls/ca.crt` and `exit=1`: with validation on, the CLI
+looks for a CA it was never given and stops rather than trusting the certificate.
+
+In short: the CLI fails closed on a bad endpoint and on an unverifiable certificate.
+
+== Exercise 3: Check who else can reach the gateway
+
+NOTE: The probe below is expected to fail to connect. That is the result you want.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get route -n {lab_namespace}
+oc run gateway-probe -n default --rm -i --restart=Never --quiet --image=registry.access.redhat.com/ubi9/ubi-minimal -- \
+  curl -sk -o /dev/null --max-time 5 -w '%\{http_code}\n' https://{release_name}.{lab_namespace}.svc.cluster.local:8080; echo "exit=$?"
+----
+
+Expected result: `No resources found in {lab_namespace} namespace.` (no public Route), then the probe pod in the
+`default` namespace prints `000` and `exit=28` (curl's timeout): the NetworkPolicy dropped its
+connection to the gateway, while the same Service answered your Web Terminal in Exercise 1.
+
+== Evidence checkpoint
+
+* Why does the Web Terminal reach the gateway when a pod in `default` cannot?
+* What would you configure in production instead of insecure mode?
+
+.Answer key
+[%collapsible]
+====
+* The NetworkPolicy `gateway-ingress` admits connections only from `{lab_namespace}` and `openshift-terminal`.
+* A certificate the CLI can verify (the gateway CA distributed to clients), so that `OPENSHELL_GATEWAY_INSECURE`
+  can stay unset, and gateway authentication (Module 8) instead of anonymous access.
+====
+
+Proceed to xref:05-module-03-agent.adoc[Module 3: AI agent coding with Pi].

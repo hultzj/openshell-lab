@@ -1,0 +1,261 @@
+= Module 1: Deploy OpenShell from the catalog
+:navtitle: Module 1: Deploy OpenShell
+
+A platform team wants one supported path for putting AI agents on the cluster, not a pile of YAML
+per team. This module installs OpenShell as a Helm chart that the OpenShift Developer Catalog
+lists, and answers the question: *what does one install create, and where does the API key go?*
+
+You will register the chart repository, give the gateway the trust it needs to reach Keycloak,
+install the release, and confirm that the key landed in Vault.
+
+.New to Helm and the Developer Catalog?
+[%collapsible]
+====
+* *Helm chart* — a package of Kubernetes manifests installed and tracked as one release.
+* *HelmChartRepository* — an OpenShift resource that makes a chart repository appear in the Developer Catalog.
+* *Helm hook* — a Job that runs at a fixed point of the install, such as before or after the main resources.
+* *ExternalSecret* — a resource the External Secrets Operator reads to copy a Vault value into a Kubernetes Secret.
+* *OIDC issuer* — the Keycloak realm URL whose signed tokens the gateway accepts.
+====
+
+== Technical context
+
+The chart `openshell-ztm-demo` wraps NVIDIA's OpenShell Helm chart and adds the ZTVP wiring. One
+`helm install` runs in three phases:
+
+[cols="1,3",options="header"]
+|===
+| Phase | What runs
+
+| Pre-install hooks
+| A CRD-installer Job creates the Vault policy and role `openshell-admin` (by running `vault` inside `vault-0`), a NetworkPolicy that lets `{lab_namespace}` reach Vault, and the `sandboxes.agents.x-k8s.io` CRD. Then Job `vault-seed-maas` logs in to Vault with that role (auth mount `hub`) and writes your key to `secret/hub/infra/openshell/maas`
+| Main resources
+| Gateway StatefulSet and Service, policy ConfigMap, ExternalSecret `maas-api-key-es`, a ClusterSPIFFEID, and a Kubernetes Secret `maas-api-key`
+| Post-install hooks
+| Job `keycloak-client-setup` creates the `openshell-gateway` client in Keycloak; Job `pi-sandbox-setup` creates the sandbox, registers the MaaS provider and applies the zero-trust policy
+|===
+
+The gateway also checks Keycloak at startup (OIDC discovery). This cluster's routes use the
+certificate of the OpenShift ingress operator, which is not publicly trusted, so you give the gateway
+that CA in a ConfigMap. The chart's default issuer points at another cluster, so you also set the issuer
+to this cluster's Keycloak.
+
+The demo gateway accepts anonymous callers and makes them administrators (Module 8 shows this). The chart would
+publish it on a public Route; this lab turns the Route off and adds a NetworkPolicy, so only the lab namespace and
+the Web Terminal namespace can reach the gateway at all.
+
+== Learning objectives
+
+* Register a Helm chart repository so the Developer Catalog lists its charts.
+* Install the OpenShell release with an issuer and CA that match this cluster, and without a public Route.
+* Limit network access to the gateway with a NetworkPolicy.
+* Identify each pod and hook Job the release creates.
+* Confirm that the MaaS key reached Vault and that External Secrets synced it.
+
+== Exercise 1: Register the chart repository
+
+Before the install, nothing of OpenShell exists. Confirm that, then register the repository.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get service {release_name} -n {lab_namespace}
+----
+
+Expected result: `Error from server (NotFound)` for the namespace or the service. There is no gateway yet,
+so the CLI has nothing to talk to.
+
+[source,yaml,subs="attributes+"]
+----
+kind: HelmChartRepository
+metadata:
+  name: openshell-ztm-demo            # <1>
+spec:
+  connectionConfig:
+    url: {chart_repo_url}   # <2>
+----
+<1> *Name* — the cluster-scoped name the console uses for this repository.
+<2> *URL* — where the console fetches `index.yaml`, the list of chart versions.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+cat <<'EOF' | oc apply -f -
+apiVersion: helm.openshift.io/v1beta1
+kind: HelmChartRepository
+metadata:
+  name: openshell-ztm-demo
+spec:
+  name: OpenShell ZTM Demo
+  connectionConfig:
+    url: {chart_repo_url}
+EOF
+helm search repo openshell-ztm-demo/openshell-ztm-demo --version {chart_version}
+----
+
+Expected result: `helmchartrepository.helm.openshift.io/openshell-ztm-demo created` (or `unchanged`),
+then one row: `openshell-ztm-demo/openshell-ztm-demo  {chart_version}  {openshell_version}`. The chart
+version you install is pinned, so a later chart release cannot change your lab.
+
+NOTE: On OpenShift {ocp_version} the HelmChartRepository has no `status` field, so there is no `Ready`
+condition to check. The catalog listing below and `helm search` are the evidence.
+
+GUI view: open the console's
+link:https://console-openshift-console.{cluster_domain}/catalog/ns/{lab_namespace}?catalogType=HelmChart&keyword=openshell[Helm Charts catalog for {lab_namespace}^]
+(perspective *Core platform*, breadcrumb *Software Catalog* > *Helm Charts*). The tile *Openshell Ztm Demo* is listed,
+and under *Chart Repositories* the filter *OpenShell ZTM Demo (1)* appears. You could install from this tile, but the
+two OpenShift-specific settings in Exercise 3 are not in the form, so this lab installs from the CLI.
+
+image::03-catalog-tile.png[The Helm Charts catalog filtered to openshell, showing the Openshell Ztm Demo tile and the OpenShell ZTM Demo chart repository filter]
+
+== Exercise 2: Prepare the namespace and the Keycloak CA
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc create namespace {lab_namespace} --dry-run=client -o yaml | oc apply -f -
+oc get configmap default-ingress-cert -n openshift-config-managed -o jsonpath='{.data.ca-bundle\.crt}' > /tmp/ingress-ca.crt
+oc create configmap keycloak-ingress-ca -n {lab_namespace} --from-file=ca.crt=/tmp/ingress-ca.crt --dry-run=client -o yaml | oc apply -f -
+grep -c 'BEGIN CERTIFICATE' /tmp/ingress-ca.crt
+----
+
+Expected result: the namespace and ConfigMap are `created` (or `configured`), and the count is `2`:
+the wildcard route certificate and the ingress operator CA that signed it.
+
+Now allow traffic to the gateway pods only from the lab namespace (the supervisor, the sandbox and the setup Jobs)
+and from `openshift-terminal`, where your Web Terminal runs:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+cat <<'EOF' | oc apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: {lab_namespace}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {lab_namespace}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-terminal
+EOF
+----
+
+Expected result: `networkpolicy.networking.k8s.io/gateway-ingress created` (or `unchanged`). Module 2 tests it from another namespace.
+
+In short: without this CA, the gateway's OIDC discovery fails at startup and the gateway pod crash-loops.
+
+== Exercise 3: Install the release
+
+Run this line on its own and type or paste your MaaS API key at the prompt. It is not echoed.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+read -rs -p "MaaS API key: " MAAS_API_KEY; echo "key length: ${#MAAS_API_KEY}"
+----
+
+Expected result: `key length: ` followed by the length of your key (a non-zero number), so you know the
+variable is set without the key being shown.
+
+IMPORTANT: Keep the prompt line separate. Pasted together with the next block, `read` would take the next
+pasted line as your key.
+
+Then install. The last line removes the key from your shell.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+helm install {release_name} openshell-ztm-demo/openshell-ztm-demo --version {chart_version} \
+  -n {lab_namespace} \
+  --set maas.apiKey="$MAAS_API_KEY" \
+  --set maas.model={maas_model} \
+  --set vault.enabled=true \
+  --set openshell.server.oidc.issuer=https://keycloak.$DOMAIN/realms/{keycloak_realm} \
+  --set openshell.server.oidc.caConfigMapName=keycloak-ingress-ca \
+  --set openshell.openshiftRoute.enabled=false \
+  --wait --timeout 10m | head -6
+unset MAAS_API_KEY
+----
+
+Expected result: after about a minute, `STATUS: deployed` and `REVISION: 1`.
+
+video::m1-install.mp4[width=960,title="Registering the chart and installing the release (recorded on a lab cluster)"]
+
+== Exercise 4: Identify what the install created
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n {lab_namespace}
+----
+
+Expected result: five pods. The gateway `{release_name}-0` and the supervisor `os-supervisor-…` are
+`1/1 Running`, the sandbox `default--{sandbox_name}` is `1/1 Running`, and `keycloak-client-setup-1-…`
+and `pi-sandbox-setup-1-…` are `Completed`.
+
+[cols="1,3",options="header"]
+|===
+| Pod | Role
+
+| `{release_name}-0`
+| Gateway (StatefulSet): the gRPC API the CLI talks to
+| `os-supervisor-…`
+| Supervisor: enforces the network boundary and swaps resolver tokens for real credentials
+| `default--{sandbox_name}`
+| The sandbox the Pi agent runs in (`default` is the workspace)
+| `keycloak-client-setup-1-…`
+| Hook Job that created the `openshell-gateway` Keycloak client
+| `pi-sandbox-setup-1-…`
+| Hook Job that created the sandbox and applied its policy
+|===
+
+Now confirm that the gateway reached this cluster's Keycloak, and that the key is in Vault:
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc logs -n {lab_namespace} {release_name}-0 | grep -o 'JWKS keys loaded.*'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+----
+
+Expected result: `JWKS keys loaded count=1` (the gateway fetched Keycloak's signing key over TLS), and
+the ExternalSecret shows `SecretSynced` and `True`: External Secrets read the key back from Vault.
+
+.The scripted assertion for this exercise
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  set -e
+  [ "$(oc get pods -n {lab_namespace} --field-selector=status.phase=Running --no-headers | wc -l)" -ge 3 ] || { echo "FAIL: fewer than 3 running pods"; exit 1; }
+  oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.status.conditions[0].status}' | grep -qx True || { echo "FAIL: ExternalSecret not synced"; exit 1; }
+  oc logs -n {lab_namespace} {release_name}-0 | grep -q 'JWKS keys loaded' || { echo "FAIL: gateway did not load Keycloak keys"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== Evidence checkpoint
+
+* Which hook wrote the key to Vault, and what happens if it cannot log in?
+* Why did the gateway need the `keycloak-ingress-ca` ConfigMap?
+* Which resource proves that Vault, not only the Helm value, now supplies the key?
+
+.Answer key
+[%collapsible]
+====
+* The pre-install Job `vault-seed-maas`, using the `openshell-admin` role that the chart's installer Job created
+  moments earlier. If the login fails it prints a warning and exits 0, so the install still succeeds with only the
+  Kubernetes Secret; the ExternalSecret status is how you tell the difference.
+* The gateway fetches Keycloak's discovery document and signing keys at startup. Keycloak's route uses the
+  ingress operator's certificate, which no public CA signs, so without the ConfigMap the TLS check fails
+  and the gateway exits.
+* The ExternalSecret `maas-api-key-es` with `SecretSynced True`. Note that the chart also writes the key
+  into the Secret `maas-api-key` directly from the Helm value; External Secrets merges the Vault copy into it.
+====
+
+Proceed to xref:04-module-02-client.adoc[Module 2: Connect the OpenShell CLI].

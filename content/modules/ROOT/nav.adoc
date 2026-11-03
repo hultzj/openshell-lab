@@ -1,0 +1,25 @@
+* xref:index.adoc[Introduction]
+* xref:01-overview.adoc[Architecture and Control Boundaries]
+* xref:02-details.adoc[Prerequisites and Environment]
+
+.Deploy and connect (11 minutes)
+* xref:03-module-01-deploy.adoc[Module 1: Deploy OpenShell]
+* xref:04-module-02-client.adoc[Module 2: Connect the CLI]
+
+.Prove the controls (21 minutes)
+* xref:05-module-03-agent.adoc[Module 3: AI agent coding]
+* xref:06-module-04-network.adoc[Module 4: Network zero trust]
+* xref:07-module-05-filesystem.adoc[Module 5: Filesystem zero trust]
+* xref:08-module-06-credentials.adoc[Module 6: Credential security]
+
+.Platform integration (16 minutes)
+* xref:09-module-07-ztvp.adoc[Module 7: ZTVP integration]
+* xref:10-module-08-auth.adoc[Module 8: User authentication]
+* xref:11-module-09-policy.adoc[Module 9: Dynamic policy]
+
+.Wrap-up
+* xref:90-cleanup.adoc[Cleanup]
+* xref:91-reference.adoc[Technical Reference]
+
+.Facilitators
+* xref:92-facilitator-guide.adoc[Facilitator Guide]

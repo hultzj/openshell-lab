@@ -1,0 +1,32 @@
+name: modules
+title: "OpenShell on Zero Trust: securing AI agents on OpenShift"
+version: ~
+nav:
+  - modules/ROOT/nav.adoc
+
+asciidoc:
+  attributes:
+    experimental: true
+    page-pagination: true
+    # A missing {attribute} becomes a warning, and the build fails on warnings.
+    attribute-missing: warn
+    # GA, TP (Technology Preview) or DP (Developer Preview) for the feature the lab teaches.
+    feature_maturity: 'GA'
+    # Showroom overrides these from user_data at deploy time; defaults are for local preview.
+    guid: '%GUID%'
+    cluster_domain: 'apps.cluster.example.com'
+    # Lab attributes: every name or version used on more than one page.
+    lab_namespace: 'openshell-system'
+    showroom_namespace: 'showroom'
+    release_name: 'openshell-ztm-demo'
+    sandbox_name: 'pi-agent-demo'
+    chart_repo_url: 'https://avijra.github.io/openshell-ztm-demo-chart/'
+    chart_version: '1.3.6'
+    openshell_version: '0.1.6'
+    pi_version: '1.4.0'
+    # Facilitator: set to a model the event's MaaS keys can use (GET /v1/models with the key).
+    maas_host: 'maas-rhdp.apps.maas.redhatworkshops.io'
+    maas_model: 'qwen36-35b-a3b'
+    keycloak_realm: 'ztvp'
+    lab_user: 'lab-admin'
+    ocp_version: '4.22'

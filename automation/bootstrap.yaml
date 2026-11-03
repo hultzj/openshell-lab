@@ -1,0 +1,30 @@
+# Parent Application for clusters without an RHDP order; `make bootstrap`
+# fills in the cluster's ingress domain and the git revision (REVISION, default: gitops.revision in values.yaml). On RHDP the Field Content CI creates
+# the equivalent itself.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: openshell-lab
+  namespace: vp-gitops
+  labels:
+    demo.redhat.com/application: field-content
+    app.kubernetes.io/part-of: openshell-lab
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hultzj/openshell-lab.git
+    targetRevision: "GIT_REVISION"
+    path: automation/argocd
+    helm:
+      valuesObject:
+        deployer:
+          domain: DEPLOYER_DOMAIN
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vp-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

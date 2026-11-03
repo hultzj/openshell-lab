@@ -1,0 +1,132 @@
+= Module 4: Network zero trust
+:navtitle: Module 4: Network zero trust
+
+An agent that can reach any host can send your code anywhere, fetch malware, or ask the cloud
+metadata service for credentials. This module answers: *can the agent reach a host, or use a program,
+that we did not approve?*
+
+You will call allowed and unlisted hosts, compare two programs calling the same host, and read the
+audit events the supervisor records.
+
+.New to process-level egress control?
+[%collapsible]
+====
+* *Allowlist* — the only destinations permitted; everything else is denied.
+* *Binary binding* — a rule names which executables may use an endpoint, not only which host.
+* *Synthetic address* — the sandbox resolves unlisted names to `198.18.0.x`, an address the supervisor refuses.
+* *OCSF* — Open Cybersecurity Schema Framework, the structured format of the supervisor's audit events.
+====
+
+== Technical context
+
+The chart's policy allows three destinations, each for named binaries only:
+
+[cols="2,1,2",options="header"]
+|===
+| Host | Port | Binaries allowed
+
+| `{maas_host}`
+| 443
+| `curl`, `node`
+| `github.com`, `api.github.com`
+| 443
+| `git`, `curl`
+| `registry.npmjs.org`
+| 443
+| `npm`, `node`
+|===
+
+This is not a Kubernetes NetworkPolicy, which decides per pod. OpenShell decides per process: the
+supervisor checks the host *and* the executable for every connection.
+
+== Learning objectives
+
+* Show an allowed host answering and unlisted hosts being refused immediately.
+* Show that the same host is allowed for one binary and refused for another.
+* Read the supervisor's audit event for a denied connection.
+
+== Exercise 1: Call the allowed hosts
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+curl -s -o /tmp/models.json -w "MaaS HTTP %\{http_code}\n" --max-time 5 https://{maas_host}/v1/models -H "Authorization: Bearer $MAAS_API_KEY"; head -c 200 /tmp/models.json; echo
+curl -s -o /dev/null -w "github.com HTTP %\{http_code}\n" --max-time 5 https://github.com'
+----
+
+Expected result: `MaaS HTTP 200` followed by a JSON model list containing `"id":"{maas_model}"`, then
+`github.com HTTP 200`. MaaS accepted the call even though the sandbox sent only its resolver token.
+
+== Exercise 2: Call unlisted hosts
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+for h in https://www.google.com https://example.com https://evil-exfil-server.com/upload http://169.254.169.254/latest/meta-data/; do
+  echo "== $h"; curl -sS --max-time 5 -o /dev/null "$h"; echo "exit=$?"
+done
+getent hosts www.google.com'
+----
+
+Expected result: every call fails with `curl: (7) Failed to connect … after 1 ms` (a few milliseconds,
+not a 5-second timeout) and `exit=7`, including the AWS metadata address. `getent` shows
+`www.google.com` resolving to a `198.18.0.x` synthetic address.
+
+video::m4-network.mp4[width=960,title="Allowed and denied egress from the sandbox (recorded on a lab cluster)"]
+
+== Exercise 3: Same host, different program
+
+`node` may reach MaaS, but GitHub is bound to `git` and `curl` only.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e '
+const t = (n, u) => fetch(u).then(r => console.log(n, "HTTP", r.status)).catch(e => console.log(n, "ERR", e.cause ? e.cause.code : e.message));
+t("node -> github.com", "https://github.com");
+t("node -> MaaS", "https://{maas_host}/v1/models");'
+----
+
+Expected result: `node -> github.com ERR EACCES` (refused for this binary) and `node -> MaaS HTTP 401`
+or `HTTP 200` (the connection is allowed; 401 only means this call sent no key).
+
+In short: `curl` reached github.com in Exercise 1 and `node` could not. The rule is per executable.
+
+== Exercise 4: Read the audit trail
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell logs {sandbox_name} --since 5m | grep 'DENIED' | tail -4
+----
+
+Expected result: `OCSF` lines such as `NET:OPEN [MED] DENIED /usr/bin/curl(…) -> example.com:443
+[reason:transparent_tcp_policy_denied]`, naming the binary, the destination and the reason.
+
+.The scripted assertion for this exercise
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: allowed host github.com returned '$out'"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://example.com >/dev/null 2>&1 && { echo "FAIL: example.com was reachable"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== Evidence checkpoint
+
+* Why did denied connections fail in about a millisecond instead of timing out?
+* What stops a compromised agent from reading cloud credentials from the metadata service?
+
+.Answer key
+[%collapsible]
+====
+* Unlisted names resolve to a synthetic `198.18.0.x` address and the supervisor refuses the connection
+  locally; nothing is sent toward the real host.
+* `169.254.169.254` is not in the allowlist for any binary, so the connection is refused like any other
+  unlisted destination.
+====
+
+Proceed to xref:07-module-05-filesystem.adoc[Module 5: Filesystem zero trust].
