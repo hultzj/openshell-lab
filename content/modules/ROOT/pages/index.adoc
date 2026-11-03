@@ -51,8 +51,9 @@ result before continuing. Facilitators: see
 xref:92-facilitator-guide.adoc[Facilitator Guide].
 
 Every module, and the Web Terminal setup, includes a short video recorded on a lab cluster during a full run of
-this guide. Watch it if you want to see a step before you run it, or to compare when your own output differs. LLM
-output (Module 3) and generated names and timestamps will differ from yours.
+this guide. A banner names each exercise, yellow boxes mark the output that proves the result, and waits for a
+command to finish are sped up (marked *sped up*). Watch a video to see a step before you run it, or to compare when
+your own output differs. LLM output (Module 3) and generated names and timestamps will differ from yours.
 
 == Lab map
 
