@@ -12,7 +12,8 @@ SECRET=openshell-lab-htpasswd
 command -v htpasswd >/dev/null || { echo "htpasswd is required" >&2; exit 1; }
 
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
-htpasswd -cbB "$tmp" "$LAB_USER" "$LAB_USER_PASSWORD" 2>/dev/null
+# Password on stdin, not argv, so it never shows in the process list.
+printf '%s\n' "$LAB_USER_PASSWORD" | htpasswd -iBc "$tmp" "$LAB_USER" 2>/dev/null
 oc create secret generic "$SECRET" -n openshift-config --from-file=htpasswd="$tmp" \
   --dry-run=client -o yaml | oc apply -f -
 
