@@ -1,0 +1,9 @@
+# Vendored from rhpds/field-sourced-content-template examples/helm/components/showroom at
+# 24ab4baf372d3dbe6b31a7532f8ad8683b5a22c6. Changes, each marked "Vendored change" in templates/showroom.yaml:
+# the git-cloner image, and the part-of label (from .Values.partOf) on the Namespace.
+apiVersion: v2
+name: showroom
+description: Showroom lab guide deployment with embedded terminal
+type: application
+version: 0.1.0
+appVersion: "1.3.1"

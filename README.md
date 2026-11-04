@@ -12,7 +12,7 @@ on a live single-node OpenShift 4.22 cluster and short videos recorded from that
 | Path | What it is |
 |---|---|
 | `Chart.yaml`, `values.yaml`, `templates/` | The RHDP field-content chart (repo root): one child Application per component |
-| `components/` | `ztvp` (patterns operator, Pattern, in-cluster secret loading), `lab-prereqs` (Web Terminal, participant user, RHDP userinfo) |
+| `components/` | `ztvp` (patterns operator, Pattern, in-cluster secret loading), `lab-prereqs` (Web Terminal, participant user, pod limit, RHDP userinfo), `showroom` (the RHDP Showroom chart, vendored with a git-cloner that retries after a node reboot) |
 | `content/` | The Antora guide (AsciiDoc pages, screenshots, videos) |
 | `automation/` | `make bootstrap`, `make verify`, `make teardown` for clusters without an RHDP order |
 | `cluster/install-config.example.yaml` | The verified single-node install config, with the pull secret and SSH key left as placeholders |

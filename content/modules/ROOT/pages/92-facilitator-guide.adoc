@@ -46,7 +46,9 @@ The order creates one Argo CD Application, `field-content`, in `openshift-gitops
   (`prereqs.maxPods`): a single-node order with OpenShift AI and the pattern runs about 260 pods, and past the limit
   the participant's Web Terminal cannot start. The change reboots the node once, during provisioning.
 | `field-content-showroom`
-| Deploys this guide from the same repository and revision.
+| Deploys this guide from the same repository and revision, with the RHDP Showroom chart vendored in
+  `components/showroom`. Its newer git-cloner fails and retries when DNS is not up after a node reboot; the
+  upstream one reported success with an empty checkout, and the guide stayed in `Init:Error`.
 |===
 
 The order page shows the cluster's own access details (console, `admin` login, MaaS key) but not the lab's: the

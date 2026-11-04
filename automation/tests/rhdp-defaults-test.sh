@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The chart's defaults fit an RHDP order and bootstrap.yaml turns them off:
 # - the Pattern reuses the base install's cert-manager OperatorGroup and RHBK 26.6 (ztvp.extraParameters);
-# - a KubeletConfig raises the single node's pod limit (prereqs.maxPods).
+# - a KubeletConfig raises the single node's pod limit (prereqs.maxPods);
+# - Showroom uses the vendored chart with a git-cloner that retries after a node reboot.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 fail=0
@@ -35,6 +36,18 @@ if off=$(helm template t components/lab-prereqs --set prereqs.maxPods=0 2>&1); t
 else
   echo "FAIL: lab-prereqs does not render with maxPods 0"; fail=1
 fi
+
+# Showroom: the child renders the vendored chart, whose git-cloner fails on a failed clone (v1.1.2 reported success).
+grep -q 'path: components/showroom' <<<"$parent" || { echo "FAIL: showroom child does not use components/showroom"; fail=1; }
+! grep -q 'field-sourced-content-template' <<<"$parent" || { echo "FAIL: a child still syncs the upstream template repo"; fail=1; }
+for p in '' . ./ lab ./lab/; do  # GitOps Path as the workload may pass it: repo root, or a subdirectory
+  want=components/showroom; [[ $p == *lab* ]] && want=lab/components/showroom
+  got=$(helm template t . --set-string gitops.path="$p" | sed -n '/name: t-showroom/,/destination:/p' | awk '$1 == "path:" {print $2}')
+  [[ $got == "$want" ]] || { echo "FAIL: GitOps Path '$p' gives showroom path '$got', want '$want'"; fail=1; }
+done
+sr=$(helm template t components/showroom --set deployer.domain=apps.example.com) || { echo "FAIL: showroom chart does not render"; fail=1; }
+grep -qE 'image: "quay.io/rhpds/git-cloner:v1\.1\.5@sha256:[0-9a-f]{64}"' <<<"$sr" || { echo "FAIL: git-cloner is not v1.1.5 pinned by digest"; fail=1; }
+! grep -q 'git-cloner:v1.1.2' <<<"$sr" || { echo "FAIL: git-cloner v1.1.2 (false success on failed clones) is back"; fail=1; }
 
 [[ $fail == 0 ]] && echo "PASS: rhdp-defaults-test"
 exit "$fail"

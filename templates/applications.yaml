@@ -86,7 +86,7 @@ spec:
 {{- end }}
 {{- if .Values.showroom.enabled }}
 ---
-# Showroom guide: the upstream field-content chart, pinned, rendering this repo's content.
+# Showroom guide: the upstream field-content chart, vendored with a fixed git-cloner, rendering this repo's content.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -102,11 +102,12 @@ metadata:
 spec:
   project: {{ .Values.argocd.project }}
   source:
-    repoURL: {{ .Values.showroom.chart.repoUrl }}
-    targetRevision: {{ .Values.showroom.chart.revision | quote }}
-    path: {{ .Values.showroom.chart.path }}
+    repoURL: {{ .Values.gitops.repoURL }}
+    targetRevision: {{ .Values.gitops.revision | quote }}
+    path: {{ $prefix }}components/showroom
     helm:
       valuesObject:
+        partOf: {{ .Release.Name | quote }}
         showroom:
           namespace: {{ .Values.showroom.namespace }}
           content:
