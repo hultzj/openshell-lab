@@ -1,5 +1,6 @@
 # OpenShell on Zero Trust lab: RHDP field-content chart (repo root).
-# Order the Field Content CI with GitOps Repo = this repo, GitOps Revision = the branch, GitOps Path = empty.
+# Order the Field Content CI with GitOps Repo = this repo, GitOps Revision = the branch, GitOps Path = "."
+# (an empty path renders as "path:" with no value, which Argo CD rejects as InvalidSpecError).
 # The workload (rhpds/core_workloads ocp4_workload_field_content) creates one Application,
 # "field-content", in openshift-gitops, and injects deployer.*, gitops.repoURL/revision/path and litemaas.*.
 

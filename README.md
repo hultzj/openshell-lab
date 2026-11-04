@@ -21,7 +21,7 @@ on a live single-node OpenShift 4.22 cluster and short videos recorded from that
 ## Deploy
 
 **RHDP:** order the Field Content CI with *GitOps Repo* `https://github.com/hultzj/openshell-lab`, *GitOps
-Revision* `field-automation`, and *GitOps Path* empty. The chart installs the Zero Trust Validated Pattern, the
+Revision* `field-automation`, and *GitOps Path* `.` (an empty path makes Argo CD reject the Application). The chart installs the Zero Trust Validated Pattern, the
 Web Terminal, the participant user and the Showroom guide.
 
 **Any other cluster:** `make -C automation bootstrap ZTVP=true` (or `ZTVP=false` where the pattern already runs),

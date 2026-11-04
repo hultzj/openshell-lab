@@ -22,8 +22,13 @@ with at least 32 vCPU and 128 GiB (the lab was verified on single-node `m6i.8xla
 | GitOps Revision
 | the branch to deploy (`field-automation`)
 | GitOps Path
-| empty (the chart is at the repository root)
+| `.` (the chart is at the repository root)
 |===
+
+IMPORTANT: Type `.` in *GitOps Path*; do not leave it empty. The workload renders an empty path as `path:` with no
+value, and Argo CD rejects such an Application with `InvalidSpecError: spec.source.repoURL and either spec.source.path
+or spec.source.chart are required` (observed with OpenShift GitOps 1.22). The chart treats `.` and an empty path the
+same, so it is ready for a workload fix.
 
 The order creates one Argo CD Application, `field-content`, in `openshift-gitops`. It deploys three children:
 

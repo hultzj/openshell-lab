@@ -1,5 +1,7 @@
 {{- /* Child Applications, one per component. Paths are relative to gitops.path (empty = repo root). */ -}}
-{{- $base := trimSuffix "/" (.Values.gitops.path | default "") -}}
+{{- /* RHDP passes "." (or "") for the repo root; normalise both, and "./sub/" to "sub". */ -}}
+{{- $base := trimSuffix "/" (trimPrefix "./" (.Values.gitops.path | default "" | toString)) -}}
+{{- if eq $base "." }}{{ $base = "" }}{{ end -}}
 {{- $prefix := ternary "" (printf "%s/" $base) (eq $base "") -}}
 {{- define "openshell-lab.syncPolicy" }}
   syncPolicy:
