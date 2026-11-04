@@ -29,6 +29,8 @@ spec:
           namespace: GITOPS_NS
         ztvp:
           enabled: ZTVP_ENABLED
+          # The RHDP defaults reuse operators an RHDP base install runs; elsewhere ZTVP installs its own.
+          extraParameters: []
         prereqs:
           webTerminal:
             install: WEB_TERMINAL_INSTALL

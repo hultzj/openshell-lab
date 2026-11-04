@@ -7,6 +7,7 @@ checks = [
   { name = "participant-user-test", cmd = "bash automation/tests/participant-user-test.sh" },
   { name = "setup-participant-test", cmd = "bash automation/tests/setup-participant-test.sh" },
   { name = "web-terminal-install-test", cmd = "bash automation/tests/web-terminal-install-test.sh" },
+  { name = "ztvp-pattern-test", cmd = "bash automation/tests/ztvp-pattern-test.sh" },
   { name = "helm-render", cmd = "helm template t . --set deployer.domain=apps.example.com >/dev/null && helm template t . --set-string gitops.path=. | grep -q 'path: components/ztvp' && helm template t components/ztvp -f values.yaml >/dev/null && helm template t components/lab-prereqs >/dev/null" },
   { name = "gitleaks",     cmd = "gitleaks dir . --no-banner --redact" },
 ]

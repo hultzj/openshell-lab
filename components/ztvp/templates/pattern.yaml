@@ -16,3 +16,7 @@ spec:
   multiSourceConfig:
     enabled: true
     clusterGroupChartVersion: "0.9.*"
+  {{- with .Values.ztvp.extraParameters }}
+  extraParameters:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}

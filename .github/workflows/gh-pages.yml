@@ -35,6 +35,7 @@ jobs:
           NO_HTPASSWD=1 bash automation/tests/participant-user-test.sh
           bash automation/tests/setup-participant-test.sh
           bash automation/tests/web-terminal-install-test.sh
+          bash automation/tests/ztvp-pattern-test.sh
       - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:

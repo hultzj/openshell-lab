@@ -22,7 +22,9 @@ on a live single-node OpenShift 4.22 cluster and short videos recorded from that
 
 **RHDP:** order the Field Content CI with *GitOps Repo* `https://github.com/hultzj/openshell-lab`, *GitOps
 Revision* `field-automation`, and *GitOps Path* `.` (an empty path makes Argo CD reject the Application). The chart installs the Zero Trust Validated Pattern, the
-Web Terminal, the participant user and the Showroom guide.
+Web Terminal, the participant user and the Showroom guide. The pattern reuses the cert-manager and Keycloak operators
+the RHDP base install runs (`ztvp.extraParameters` in `values.yaml`). The order page does not show the participant
+password; the Facilitator Guide shows how to read it.
 
 **Any other cluster:** `make -C automation bootstrap ZTVP=true` (or `ZTVP=false` where the pattern already runs),
 then `make -C automation verify`. Details in the Facilitator Guide (`content/modules/ROOT/pages/92-facilitator-guide.adoc`).

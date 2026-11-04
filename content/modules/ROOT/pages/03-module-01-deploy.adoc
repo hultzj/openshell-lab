@@ -118,8 +118,10 @@ oc create configmap keycloak-ingress-ca -n {lab_namespace} --from-file=ca.crt=/t
 grep -c 'BEGIN CERTIFICATE' /tmp/ingress-ca.crt
 ----
 
-Expected result: the namespace and ConfigMap are `created` (or `configured`), and the count is `2`:
-the wildcard route certificate and the ingress operator CA that signed it.
+Expected result: the namespace and ConfigMap are `created` (or `configured`), and the count is `2` or `3`. With
+OpenShift's default ingress certificate it is `2`: the wildcard route certificate and the ingress operator CA that
+signed it. An RHDP cluster serves a public certificate, so it is `3`: the wildcard certificate and the two
+intermediate CAs above it. Either bundle lets the gateway verify Keycloak's route.
 
 Now allow traffic to the gateway pods only from the lab namespace (the supervisor, the sandbox and the setup Jobs)
 and from `openshift-terminal`, where your Web Terminal runs:

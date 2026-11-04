@@ -47,10 +47,25 @@ The order creates one Argo CD Application, `field-content`, in `openshift-gitops
 | Deploys this guide from the same repository and revision.
 |===
 
-The order page lists the lab details from the ConfigMaps labelled `demo.redhat.com/userinfo` in `openshell-lab`,
-including `{lab_user}` and its password once `participant-setup` has run. The OAuth server then rolls out the
-new identity provider, so the first login works about two minutes after the Job completes. You can also read the password with
-`oc get secret lab-user-credentials -n openshell-lab -o jsonpath='{.data.password}' | base64 -d`.
+The order page shows the cluster's own access details (console, `admin` login, MaaS key) but not the lab's: the
+field-content workload creates the Application and exits without reading the lab's `demo.redhat.com/userinfo`
+ConfigMaps. Read the `{lab_user}` password from the cluster once `participant-setup` has run, logged in as the
+order's `admin` user:
+
+[source,bash]
+----
+oc get secret lab-user-credentials -n openshell-lab -o jsonpath='{.data.password}' | base64 -d; echo
+----
+
+The OAuth server then rolls out the new identity provider, so the first login works about two minutes after the Job
+completes. On the console login page, choose `openshell-lab-htpasswd`; the other provider is the order's own Keycloak.
+
+The RHDP base install already runs cert-manager (it issues the cluster's public ingress certificate) and the Red Hat
+build of Keycloak 26.6 (cluster login). The chart's `ztvp.extraParameters` make the pattern reuse cert-manager's
+OperatorGroup and follow Keycloak 26.6. Without them OLM fails cert-manager for the whole cluster (two OperatorGroups
+in one namespace) and refuses the pattern's Keycloak 26.4, and the pattern never installs Vault. If an order shows
+`InstallPlanFailed` on `rhbk-operator` in `keycloak-system`, compare its channel with
+`oc get subscription -n keycloak -o jsonpath='{.items[*].spec.channel}'`.
 
 The chart assumes the order's Argo CD controller is cluster-admin, as the field-content examples need. `make
 -C automation verify` checks it.
@@ -109,7 +124,7 @@ Every line must print `PASS`. Fix any `FAIL` before participants arrive.
 == Day of class
 
 * Share the Showroom URL (`oc -n {showroom_namespace} get route showroom`), the console URL, the `{lab_user}`
-  password (from the order page or the Secret above) and a MaaS API key per participant.
+  password (from the Secret above) and a MaaS API key per participant.
 * Check that the keys can use the model the guide names: `curl -s https://{maas_host}/v1/models -H "Authorization: Bearer <key>"`.
   If the model differs from `{maas_model}`, change `maas_model` in `content/antora.yml` on an event branch.
 * The Web Terminal stops when idle and loses its home directory; participants re-run the setup block on the

@@ -35,6 +35,16 @@ ztvp:
   # The patterns operator re-points the OpenShift GitOps Subscription at this channel. RHDP installs
   # GitOps from "latest"; matching it avoids a channel switch that would imply a downgrade.
   gitopsChannel: latest
+  # helm --set overrides for the pattern's clusterGroup (Pattern spec.extraParameters). The defaults fit an
+  # RHDP order, whose base install already runs cert-manager (it issues the ingress certificate) and RHBK
+  # 26.6 (cluster login): reuse cert-manager's OperatorGroup (a second one makes OLM fail the operator), and
+  # follow RHBK 26.6 (OLM refuses 26.4, which would drop a stored version of the shared CRDs).
+  # make bootstrap clears them, so a cluster without those operators gets the pattern's own defaults.
+  extraParameters:
+    - name: clusterGroup.namespaces.cert-manager-operator.operatorGroup
+      value: "false"
+    - name: clusterGroup.subscriptions.rhbk.channel
+      value: stable-v26.6
   # Runs the pattern's own load-secrets playbook in-cluster (the operator cannot load Vault secrets itself).
   utilityImage: quay.io/validatedpatterns/utility-container@sha256:3765b7ee4dc2a49f53d209b9da778804e72d5b0f033bfc3415281a50f4618766
 

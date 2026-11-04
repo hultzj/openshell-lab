@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run by the participant-setup Job. Generates the participant password once and keeps it in the Secret
 # lab-user-credentials (a re-run reuses it), applies the user with participant-user.sh, and publishes the
-# credentials in a ConfigMap labelled demo.redhat.com/userinfo, which RHDP shows on the order page.
+# credentials in a ConfigMap labelled demo.redhat.com/userinfo (the RHDP userinfo format; the field-content
+# workload does not collect it, so read the Secret).
 set -euo pipefail
 : "${NS:?}" "${LAB_USER:?}" "${CONSOLE_URL:?}"
 PARTICIPANT_SCRIPT=${PARTICIPANT_SCRIPT:-/scripts/participant-user.sh}

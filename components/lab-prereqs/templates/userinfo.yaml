@@ -1,4 +1,5 @@
-# Lab details for the RHDP order page. The participant password is added by the participant-setup Job.
+# Lab details in the RHDP userinfo format. The participant password is added by the participant-setup Job.
+# The field-content workload does not collect these (checked 2026-11-04), so its order page does not show them.
 apiVersion: v1
 kind: ConfigMap
 metadata:
