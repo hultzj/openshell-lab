@@ -11,15 +11,21 @@ on a live single-node OpenShift 4.22 cluster and short videos recorded from that
 
 | Path | What it is |
 |---|---|
+| `Chart.yaml`, `values.yaml`, `templates/` | The RHDP field-content chart (repo root): one child Application per component |
+| `components/` | `ztvp` (patterns operator, Pattern, in-cluster secret loading), `lab-prereqs` (Web Terminal, participant user, RHDP userinfo) |
 | `content/` | The Antora guide (AsciiDoc pages, screenshots, videos) |
-| `automation/` | `make prereqs`, `make bootstrap`, `make verify`, `make teardown`; the GitOps chart Showroom is deployed from (`automation/argocd`) |
+| `automation/` | `make bootstrap`, `make verify`, `make teardown` for clusters without an RHDP order |
 | `cluster/install-config.example.yaml` | The verified single-node install config, with the pull secret and SSH key left as placeholders |
 | `PLAN.md` | Intake decisions, verified versions, and what the live pass found |
 
 ## Deploy
 
-See the Facilitator Guide (`content/modules/ROOT/pages/92-facilitator-guide.adoc`): install ZTVP, run
-`LAB_USER_PASSWORD=... make -C automation prereqs`, then `make -C automation bootstrap` and `make -C automation verify`.
+**RHDP:** order the Field Content CI with *GitOps Repo* `https://github.com/hultzj/openshell-lab`, *GitOps
+Revision* `field-automation`, and *GitOps Path* empty. The chart installs the Zero Trust Validated Pattern, the
+Web Terminal, the participant user and the Showroom guide.
+
+**Any other cluster:** `make -C automation bootstrap ZTVP=true` (or `ZTVP=false` where the pattern already runs),
+then `make -C automation verify`. Details in the Facilitator Guide (`content/modules/ROOT/pages/92-facilitator-guide.adoc`).
 
 ## Build the guide locally
 

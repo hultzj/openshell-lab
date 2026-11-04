@@ -1,0 +1,15 @@
+{{- if .Values.prereqs.webTerminal.install }}
+# The participant's shell (the Showroom terminal is off). Set prereqs.webTerminal.install=false when
+# the cluster already has the operator, so Argo CD never adopts (and on teardown deletes) the owner's.
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: web-terminal
+  namespace: openshift-operators
+spec:
+  name: web-terminal
+  channel: {{ .Values.prereqs.webTerminal.channel }}
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+{{- end }}

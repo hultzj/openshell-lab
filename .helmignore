@@ -1,0 +1,22 @@
+# The repo root is the RHDP field-content chart; keep the guide, tooling and build output out of it.
+.git/
+.github/
+.xreview/
+.xreview.toml
+.cache/
+.playwright-mcp/
+node_modules/
+www/
+evidence/
+content/
+scripts/
+automation/
+cluster/
+*.md
+package.json
+package-lock.json
+site.yml
+ui-config.yml
+.gitignore
+# Each component is rendered by its own child Application, not as part of this chart.
+components/

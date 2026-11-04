@@ -41,9 +41,9 @@ done
 # Argo CD consumes these charts straight from git, so they must render. Each child from this repo is
 # rendered with exactly the values its parent passes, and every Namespace it creates must carry the
 # lab's part-of label, which make bootstrap's ownership guard relies on.
-[[ -d automation/argocd ]] || fail "automation/argocd (the parent chart) is missing"
+[[ -f Chart.yaml && -d templates ]] || fail "the parent chart (Chart.yaml, templates/ at the repo root) is missing"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-if rendered=$(helm template lab automation/argocd --set deployer.domain=apps.example.com 2>&1); then
+if rendered=$(helm template lab . --set deployer.domain=apps.example.com 2>&1); then
   awk -v dir="$tmp" '
     function flush() {
       if (path != "") { n++; printf "%s", vals > (dir "/" n ".values"); print path > (dir "/" n ".path"); close(dir "/" n ".values"); close(dir "/" n ".path") }
@@ -52,7 +52,7 @@ if rendered=$(helm template lab automation/argocd --set deployer.domain=apps.exa
     /^---/ { flush(); next }
     vo { if ($0 ~ /^[[:space:]]*$/) next
          if (match($0, /[^ ]/) <= ind) vo = 0; else { vals = vals substr($0, ind + 2) "\n"; next } }
-    $1 == "path:" && $2 ~ /^automation\// { path = $2 }
+    $1 == "path:" && $2 ~ /^components\// { path = $2 }
     $1 == "valuesObject:" { vo = 1; ind = match($0, /[^ ]/) }
     END { flush() }
   ' <<<"$rendered"
@@ -69,7 +69,7 @@ if rendered=$(helm template lab automation/argocd --set deployer.domain=apps.exa
   done
 else
   printf '%s\n' "$rendered" >&2
-  fail "automation/argocd does not render"
+  fail "the parent chart at the repo root does not render"
 fi
 
 # Every exercise, GUI-only ones included, states an Expected result.
@@ -84,8 +84,8 @@ for page in "$pages"/*.adoc; do
 done
 
 # Every child Application sourced from this repo must point at a directory that exists.
-if rendered=$(helm template lab automation/argocd --set deployer.domain=apps.example.com 2>/dev/null); then
-  for path in $(awk '$1 == "path:" && $2 ~ /^automation\// {print $2}' <<<"$rendered"); do
+if rendered=$(helm template lab . --set deployer.domain=apps.example.com 2>/dev/null); then
+  for path in $(awk '$1 == "path:" && $2 ~ /^components\// {print $2}' <<<"$rendered"); do
     [[ -d $path ]] || fail "a child Application points at $path, which does not exist"
   done
 fi

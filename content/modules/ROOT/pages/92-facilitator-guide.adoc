@@ -6,70 +6,66 @@ For facilitators provisioning lab environments ahead of class. Participants can 
 Each participant gets a dedicated cluster. The lab was verified on single-node OpenShift {ocp_version}
 on AWS (`m6i.8xlarge`, 32 vCPU and 128 GiB, 300 GB gp3) running the full Zero Trust Validated Pattern.
 
-== Cluster prerequisites
+== Provision on RHDP
 
-[cols="2,3",options="header"]
+The repository root is a Red Hat Demo Platform field-content chart. Order the *Field Content CI* on a cluster
+with at least 32 vCPU and 128 GiB (the lab was verified on single-node `m6i.8xlarge`), and set:
+
+[cols="1,2",options="header"]
 |===
-| Prerequisite | Check
+| Order field | Value
 
-| OpenShift {ocp_version} (ZTVP supports 4.20 to 4.22), a default StorageClass
-| `oc get clusterversion; oc get storageclass`
-| Zero Trust Validated Pattern installed, every Argo CD application `Synced` and `Healthy`
-| `oc get applications.argoproj.io -A`
-| OpenShift GitOps (installed by ZTVP)
-| `oc get csv -n openshift-gitops-operator`
-| Capacity for OpenShell (about 1 vCPU and 2 GiB on top of ZTVP)
-| `oc adm top node`
+| Existing Gitops Repo?
+| checked
+| GitOps Repo
+| `https://github.com/hultzj/openshell-lab`
+| GitOps Revision
+| the branch to deploy (`field-automation`)
+| GitOps Path
+| empty (the chart is at the repository root)
 |===
 
-=== Install a single-node cluster (optional)
+The order creates one Argo CD Application, `field-content`, in `openshift-gitops`. It deploys three children:
 
-`cluster/install-config.example.yaml` in this repository is the verified install configuration. Copy it outside the
-repository, fill in the pull secret and SSH key, and run `openshift-install create cluster`. It pins one
-availability zone, so it needs a single NAT gateway Elastic IP.
+[cols="1,3",options="header"]
+|===
+| Application | What it does
 
-=== Install ZTVP
+| `field-content-ztvp`
+| Installs the patterns operator and the `layered-zero-trust` Pattern, then the Job `ztvp-load-secrets` runs the
+  pattern's own `load-secrets` playbook in the cluster once Vault and External Secrets are up. ZTVP takes 30 to 40
+  minutes after the order completes.
+| `field-content-prereqs`
+| Subscribes the Web Terminal operator, and the Job `participant-setup` creates `{lab_user}` (identity provider
+  `openshell-lab-htpasswd`, cluster-admin) with a random password.
+| `field-content-showroom`
+| Deploys this guide from the same repository and revision.
+|===
 
-From a clone of `validatedpatterns/layered-zero-trust`, logged in as cluster-admin:
+The order page lists the lab details from the ConfigMaps labelled `demo.redhat.com/userinfo` in `openshell-lab`,
+including `{lab_user}` and its password once `participant-setup` has run. You can also read the password with
+`oc get secret lab-user-credentials -n openshell-lab -o jsonpath='{.data.password}' | base64 -d`.
+
+The chart assumes the order's Argo CD controller is cluster-admin, as the field-content examples need. `make
+-C automation verify` checks it.
+
+== Provision any other cluster
+
+The same chart, applied by `make -C automation bootstrap`. Use `ZTVP=true` on a cluster without the pattern, or
+`ZTVP=false` (the default) on one that already runs it:
 
 [source,bash]
 ----
-cp values-secret.yaml.template ~/values-secret-layered-zero-trust.yaml   # every value is generated
-./pattern.sh make install
-----
-
-If `make install` stops while waiting for Vault, wait until `oc get pod vault-0 -n vault` is `Running`,
-then run `./pattern.sh make load-secrets`. Load secrets after the API servers settle: during a kube-apiserver
-rollout, the Vault policy writes fail with `Handshake status 500`.
-
-== Lab prerequisites
-
-From a checkout of this repository, logged in as cluster-admin. The participant password comes from a local
-file or variable, never from git:
-
-[source,bash,subs="attributes+"]
-----
-LAB_USER_PASSWORD='<choose one>' make -C automation prereqs
-----
-
-This target:
-
-* subscribes the Web Terminal operator (`web-terminal`, channel `fast`), only if no Subscription for it exists;
-* creates the htpasswd identity provider `openshell-lab-htpasswd` and the user `{lab_user}` with cluster-admin
-  (ClusterRoleBinding `openshell-lab-participant`).
-
-The chart creates its own Vault policy and role (`openshell-admin`) at install time; no Vault setup is needed.
-
-== Provision the guide
-
-[source,bash]
-----
-make -C automation bootstrap
+make -C automation bootstrap ZTVP=true
 make -C automation status
 ----
 
-The Applications go to ZTVP's single Argo CD instance in `vp-gitops`. Repeat `status` until every Application shows `Synced` and `Healthy`.
-The Showroom guide has no terminal and no console tab (see `ui-config.yml`).
+The Applications go to the Argo CD instance in `openshift-gitops` if the cluster has one, otherwise to `vp-gitops`
+(ZTVP's own); set `GITOPS_NS` to override. Repeat `status` until every Application shows `Synced` and `Healthy`.
+
+`cluster/install-config.example.yaml` is the verified single-node install configuration. Copy it outside the
+repository, fill in the pull secret and SSH key, and run `openshift-install create cluster`. It pins one
+availability zone, so it needs a single NAT gateway Elastic IP.
 
 == Verify every cluster
 
@@ -83,7 +79,7 @@ Every line must print `PASS`. Fix any `FAIL` before participants arrive.
 == Day of class
 
 * Share the Showroom URL (`oc -n {showroom_namespace} get route showroom`), the console URL, the `{lab_user}`
-  password and a MaaS API key per participant.
+  password (from the order page or the Secret above) and a MaaS API key per participant.
 * Check that the keys can use the model the guide names: `curl -s https://{maas_host}/v1/models -H "Authorization: Bearer <key>"`.
   If the model differs from `{maas_model}`, change `maas_model` in `content/antora.yml` on an event branch.
 * The Web Terminal stops when idle and loses its home directory; participants re-run the setup block on the
@@ -94,9 +90,9 @@ Every line must print `PASS`. Fix any `FAIL` before participants arrive.
 * The chart repository is third-party and still changing. The guide pins chart {chart_version}; check
   `helm search repo openshell-ztm-demo -l` before an event.
 
-== Remove the prerequisites
+== Remove the lab
 
-After the lab, as cluster-admin, look before you delete:
+As cluster-admin, look before you delete:
 
 [source,bash]
 ----
@@ -104,7 +100,8 @@ oc get subscription web-terminal -n openshift-operators -o jsonpath='{.metadata.
 oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
 ----
 
-Remove the Web Terminal Subscription only if it carries `app.kubernetes.io/part-of: openshell-lab`. Remove the
+On an RHDP order, deleting the cluster removes everything. Elsewhere, `make -C automation teardown` deletes the lab
+Applications and what they created (the ZTVP Pattern is kept on purpose). Then remove the
 `openshell-lab-htpasswd` identity provider entry, the Secret of the same name in `openshift-config`, and the
 ClusterRoleBinding `openshell-lab-participant`. The chart leaves the Vault role and policy `openshell-admin` and
 the NetworkPolicy `allow-openshell-to-vault` in `vault`; remove them with `vault delete auth/hub/role/openshell-admin`

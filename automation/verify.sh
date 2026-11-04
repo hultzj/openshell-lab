@@ -2,11 +2,18 @@
 # Facilitator readiness check: one PASS/FAIL line per lab prerequisite.
 set -uo pipefail
 
-GITOPS_NS=${GITOPS_NS:-vp-gitops}
+# openshift-gitops on RHDP (or any default GitOps install); vp-gitops where ZTVP brought its own instance.
+if [[ -z ${GITOPS_NS:-} ]]; then
+  GITOPS_NS=vp-gitops; oc get argocd -n openshift-gitops -o name 2>/dev/null | grep -q . && GITOPS_NS=openshift-gitops
+fi
 SHOWROOM_NS=${SHOWROOM_NS:-showroom}
 LAB_NS=${LAB_NS:-openshell-system}
 # The parent Application name; children are named <LAB_APP>-<component>.
-LAB_APP=${LAB_APP:-openshell-lab}
+# RHDP's workload names the parent "field-content"; make bootstrap names it openshell-lab.
+if [[ -z ${LAB_APP:-} ]]; then
+  LAB_APP=openshell-lab; oc get applications.argoproj.io field-content -n "$GITOPS_NS" -o name >/dev/null 2>&1 && LAB_APP=field-content
+fi
+SETUP_NS=${SETUP_NS:-openshell-lab}
 # Permission checks impersonate the participant user (the Showroom terminal is off).
 failed=0
 
@@ -75,21 +82,33 @@ AS_USER=(--as "$LAB_USER" --as-group system:authenticated --as-group system:auth
 
 ztvp_healthy() {
   local apps
-  apps=$(oc get applications.argoproj.io -n "$GITOPS_NS" -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/part-of}{" "}{.status.sync.status}/{.status.health.status}{"\n"}{end}') || return 1
-  # ZTVP's own applications carry no part-of label; this lab's are checked above.
-  awk '$1 == "" || $1 !~ /openshell-lab/ { n++; if ($NF != "Synced/Healthy") bad = 1 } END { exit !(n > 0 && !bad) }' <<<"$(sed 's/^ /- /' <<<"$apps")"
+  apps=$(oc get applications.argoproj.io -n "$GITOPS_NS" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.sync.status}/{.status.health.status}{" "}{.metadata.labels.app\.kubernetes\.io/part-of}{"\n"}{end}') || return 1
+  # Every Application that is not this lab's (ZTVP's own) must be Synced/Healthy, and there must be some.
+  awk -v app="$LAB_APP" '$1 == app || $3 == app { next } { n++; if ($2 != "Synced/Healthy") bad = 1 } END { exit !(n > 0 && !bad) }' <<<"$apps"
 }
+# The newest Job with this app.kubernetes.io/name label succeeded (Job names carry a hash of their spec).
+job_complete() { [[ $(oc get jobs -n "$1" -l "app.kubernetes.io/name=$2" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].status.succeeded}' 2>/dev/null) == 1 ]]; }
+has_job() { oc get jobs -n "$1" -l "app.kubernetes.io/name=$2" -o name 2>/dev/null | grep -q .; }
+controller_admin() { oc auth can-i '*' '*' --all-namespaces --as "system:serviceaccount:$GITOPS_NS:$GITOPS_NS-argocd-application-controller"; }
 csv_succeeded() { oc get csv -n openshift-operators -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{"\n"}{end}' | grep -q "^$1.* Succeeded$"; }
 idp_present() { oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}' | tr ' ' '\n' | grep -qx openshell-lab-htpasswd; }
 eso_store_ready() { [[ $(oc get clustersecretstore vault-backend -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}') == True ]]; }
 url_ok() { curl -fsSL --max-time 20 -r 0-0 -o /dev/null "$1"; }   # one byte: proves the object itself is served
 maas_reachable() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://maas-rhdp.apps.maas.redhatworkshops.io/v1/models"); [[ $c == 401 || $c == 200 ]]; }
 
+check "Argo CD controller ($GITOPS_NS) is cluster-admin (the chart creates operators and ClusterRoleBindings)" controller_admin
 check "ZTVP Argo CD applications are Synced/Healthy" ztvp_healthy
+if has_job patterns-operator ztvp-load-secrets; then
+  check "ZTVP secrets loaded into Vault (Job ztvp-load-secrets)" job_complete patterns-operator ztvp-load-secrets
+fi
 check "Vault is running" oc -n vault wait pod/vault-0 --for=condition=Ready --timeout=10s
 check "ClusterSecretStore vault-backend is Ready" eso_store_ready
 check "Keycloak admin secret exists" oc -n keycloak-system get secret keycloak-admin-user
 check "Web Terminal operator Succeeded" csv_succeeded web-terminal
+if has_job "$SETUP_NS" participant-setup; then
+  check "participant user created (Job participant-setup)" job_complete "$SETUP_NS" participant-setup
+  check "participant credentials stored (Secret lab-user-credentials)" oc get secret lab-user-credentials -n "$SETUP_NS"
+fi
 check "identity provider openshell-lab-htpasswd configured" idp_present
 check "$LAB_USER can create CRDs (cluster-admin)" oc auth can-i create customresourcedefinitions "${AS_USER[@]}"
 check "$LAB_USER can read the Keycloak admin secret" oc auth can-i get secrets -n keycloak-system "${AS_USER[@]}"

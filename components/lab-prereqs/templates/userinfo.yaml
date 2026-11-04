@@ -1,0 +1,17 @@
+# Lab details for the RHDP order page. The participant password is added by the participant-setup Job.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-info
+  namespace: {{ .Values.prereqs.namespace }}
+  labels:
+    demo.redhat.com/application: field-content
+    demo.redhat.com/userinfo: ""
+data:
+  lab_title: "OpenShell on Zero Trust: securing AI agents on OpenShift"
+  console_url: "https://console-openshift-console.{{ .Values.deployer.domain }}"
+  {{- if .Values.showroom.enabled }}
+  showroom_url: "https://showroom-{{ .Values.showroom.namespace }}.{{ .Values.deployer.domain }}"
+  {{- end }}
+  lab_user_credentials: "oc get secret lab-user-credentials -n {{ .Values.prereqs.namespace }}"
+  ztvp_note: "Zero Trust Validated Pattern installs in 30-40 minutes after the order completes; check Argo CD in openshift-gitops."

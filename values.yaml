@@ -1,0 +1,70 @@
+# OpenShell on Zero Trust lab: RHDP field-content chart (repo root).
+# Order the Field Content CI with GitOps Repo = this repo, GitOps Revision = the branch, GitOps Path = empty.
+# The workload (rhpds/core_workloads ocp4_workload_field_content) creates one Application,
+# "field-content", in openshift-gitops, and injects deployer.*, gitops.repoURL/revision/path and litemaas.*.
+
+# Repository the child Applications sync from. The workload overwrites all three.
+gitops:
+  repoURL: https://github.com/hultzj/openshell-lab.git
+  revision: field-automation
+  path: ""
+
+argocd:
+  # Where the child Applications live: the Argo CD instance that runs the parent.
+  # RHDP: openshift-gitops. A cluster where ZTVP brought its own instance: vp-gitops (make bootstrap sets it).
+  namespace: openshift-gitops
+  project: default
+
+lab:
+  # Participants create this namespace themselves (Module 1); the chart does not.
+  namespace: openshell-system
+
+# Zero Trust Validated Pattern. false on clusters that already run it.
+ztvp:
+  enabled: true
+  pattern:
+    name: layered-zero-trust
+    repoURL: https://github.com/validatedpatterns/layered-zero-trust
+    # Verified at commit 10e37e5 (2026-11-02). The Pattern CR needs a branch for its own clone.
+    revision: main
+    clusterGroupName: hub
+  operator:
+    channel: fast
+    source: community-operators
+  # The patterns operator re-points the OpenShift GitOps Subscription at this channel. RHDP installs
+  # GitOps from "latest"; matching it avoids a channel switch that would imply a downgrade.
+  gitopsChannel: latest
+  # Runs the pattern's own load-secrets playbook in-cluster (the operator cannot load Vault secrets itself).
+  utilityImage: quay.io/validatedpatterns/utility-container@sha256:3765b7ee4dc2a49f53d209b9da778804e72d5b0f033bfc3415281a50f4618766
+
+prereqs:
+  enabled: true
+  # Namespace for the lab's own setup Jobs and the RHDP userinfo ConfigMaps.
+  namespace: openshell-lab
+  webTerminal:
+    # Subscribe the Web Terminal operator. Set false if the cluster already has it.
+    install: true
+    channel: fast
+  participant:
+    username: lab-admin
+
+showroom:
+  enabled: true
+  namespace: showroom
+  # The lab needs cluster-admin and the Showroom URL has no login, so no Showroom terminal.
+  terminal: false
+  chart:
+    repoUrl: https://github.com/rhpds/field-sourced-content-template.git
+    revision: 24ab4baf372d3dbe6b31a7532f8ad8683b5a22c6
+    path: examples/helm/components/showroom
+  terminalImage: quay.io/rhpds/openshift-showroom-terminal-ocp:4.22-2026-09-14-060546@sha256:c0a85c5b62a9081208f44b01dfbe4a411369dbe42079a3d6fe2312824e4a1054
+
+# Injected by the field-content workload (or bootstrap.yaml); do not set here.
+deployer:
+  domain: ""
+  apiUrl: ""
+
+# Injected by the field-content workload when the order provisions a LiteMaaS key. Not used yet: the
+# guide's sandbox policy and checks target the maas-rhdp host (see the Facilitator Guide).
+litemaas:
+  enabled: false

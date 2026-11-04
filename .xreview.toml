@@ -3,8 +3,11 @@
 checks = [
   { name = "antora-build", cmd = "npm run build" },
   { name = "check-lab",    cmd = "bash scripts/check-lab.sh" },
-  { name = "shell-syntax", cmd = "bash -n automation/verify.sh && bash -n automation/participant-user.sh && bash -n scripts/check-lab.sh" },
+  { name = "shell-syntax", cmd = "bash -n automation/verify.sh && bash -n components/lab-prereqs/files/participant-user.sh && bash -n components/lab-prereqs/files/setup-participant.sh && bash -n automation/web-terminal-install.sh && bash -n scripts/check-lab.sh" },
   { name = "participant-user-test", cmd = "bash automation/tests/participant-user-test.sh" },
+  { name = "setup-participant-test", cmd = "bash automation/tests/setup-participant-test.sh" },
+  { name = "web-terminal-install-test", cmd = "bash automation/tests/web-terminal-install-test.sh" },
+  { name = "helm-render", cmd = "helm template t . --set deployer.domain=apps.example.com >/dev/null && helm template t components/ztvp -f values.yaml >/dev/null && helm template t components/lab-prereqs >/dev/null" },
   { name = "gitleaks",     cmd = "gitleaks dir . --no-banner --redact" },
 ]
 

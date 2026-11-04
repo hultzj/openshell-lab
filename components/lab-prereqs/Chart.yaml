@@ -1,0 +1,5 @@
+apiVersion: v2
+name: lab-prereqs
+description: OpenShell lab prerequisites - Web Terminal operator, participant user, RHDP userinfo
+type: application
+version: 0.1.0

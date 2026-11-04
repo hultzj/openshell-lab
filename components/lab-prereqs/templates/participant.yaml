@@ -1,0 +1,70 @@
+# Creates the participant user once: a random password kept in the Secret lab-user-credentials, an htpasswd
+# identity provider (openshell-lab-htpasswd) and cluster-admin. Re-running reuses the stored password.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: participant-setup
+  namespace: {{ .Values.prereqs.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openshell-lab-participant-setup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: participant-setup
+    namespace: {{ .Values.prereqs.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: participant-setup
+  namespace: {{ .Values.prereqs.namespace }}
+data:
+  participant-user.sh: |
+{{ .Files.Get "files/participant-user.sh" | indent 4 }}
+  setup-participant.sh: |
+{{ .Files.Get "files/setup-participant.sh" | indent 4 }}
+---
+{{- /* Jobs are immutable: the name carries a hash of the spec and scripts, so a changed input creates a new
+       Job (Argo CD prunes the old one) instead of failing the sync. */}}
+{{- $spec := include "participant-setup.spec" . }}
+{{- $hash := printf "%s%s%s" $spec (.Files.Get "files/participant-user.sh") (.Files.Get "files/setup-participant.sh") | sha256sum | trunc 8 }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: participant-setup-{{ $hash }}
+  namespace: {{ .Values.prereqs.namespace }}
+  labels:
+    app.kubernetes.io/name: participant-setup
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+{{ $spec | indent 2 }}
+{{- define "participant-setup.spec" }}
+backoffLimit: 6
+template:
+  spec:
+    serviceAccountName: participant-setup
+    restartPolicy: OnFailure
+    containers:
+      - name: setup
+        image: {{ .Values.image }}
+        env:
+          - { name: HOME, value: /tmp }
+          - { name: NS, value: {{ .Values.prereqs.namespace | quote }} }
+          - { name: LAB_USER, value: {{ .Values.prereqs.participant.username | quote }} }
+          - { name: CONSOLE_URL, value: "https://console-openshift-console.{{ .Values.deployer.domain }}" }
+        command: ["/bin/bash", "/scripts/setup-participant.sh"]
+        volumeMounts:
+          - { name: scripts, mountPath: /scripts }
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }
+    volumes:
+      - name: scripts
+        configMap: { name: participant-setup }
+{{- end }}

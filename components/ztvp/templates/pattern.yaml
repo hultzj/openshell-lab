@@ -1,0 +1,18 @@
+apiVersion: gitops.hybrid-cloud-patterns.io/v1alpha1
+kind: Pattern
+metadata:
+  name: {{ .Values.ztvp.pattern.name }}
+  namespace: patterns-operator
+  annotations:
+    # The CRD arrives with the operator. Argo CD never deletes the Pattern: removing it would tear down
+    # every ZTVP service, and the operator's webhook refuses deletion without a prune annotation anyway.
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Delete=false,Prune=false
+spec:
+  clusterGroupName: {{ .Values.ztvp.pattern.clusterGroupName }}
+  gitSpec:
+    targetRepo: {{ .Values.ztvp.pattern.repoURL }}
+    targetRevision: {{ .Values.ztvp.pattern.revision }}
+  multiSourceConfig:
+    enabled: true
+    clusterGroupChartVersion: "0.9.*"

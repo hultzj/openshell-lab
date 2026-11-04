@@ -1,0 +1,10 @@
+# Set by the parent chart.
+partOf: ""
+prereqs:
+  namespace: openshell-lab
+  webTerminal: { install: true, channel: fast }
+  participant: { username: lab-admin }
+showroom: { enabled: true, namespace: showroom }
+deployer: { domain: "" }
+# Image with oc, jq, openssl and python3-bcrypt (the Validated Patterns utility container).
+image: quay.io/validatedpatterns/utility-container@sha256:3765b7ee4dc2a49f53d209b9da778804e72d5b0f033bfc3415281a50f4618766

@@ -1,0 +1,45 @@
+{{- /* Everything here is kept on teardown and when ztvp.enabled turns false: the Pattern lives in this
+       namespace and needs its operator, and removing them would tear down every ZTVP service. */ -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: patterns-operator
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+  labels:
+    app.kubernetes.io/part-of: {{ .Values.partOf }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: patterns-operator-group
+  namespace: patterns-operator
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  upgradeStrategy: Default
+---
+# Read by the patterns operator before it manages the OpenShift GitOps Subscription.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: patterns-operator-config
+  namespace: patterns-operator
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+data:
+  gitops.channel: {{ .Values.ztvp.gitopsChannel | quote }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: patterns-operator
+  namespace: patterns-operator
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  name: patterns-operator
+  channel: {{ .Values.ztvp.operator.channel }}
+  source: {{ .Values.ztvp.operator.source }}
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
