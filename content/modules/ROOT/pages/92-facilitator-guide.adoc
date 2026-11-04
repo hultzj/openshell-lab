@@ -48,7 +48,8 @@ The order creates one Argo CD Application, `field-content`, in `openshift-gitops
 |===
 
 The order page lists the lab details from the ConfigMaps labelled `demo.redhat.com/userinfo` in `openshell-lab`,
-including `{lab_user}` and its password once `participant-setup` has run. You can also read the password with
+including `{lab_user}` and its password once `participant-setup` has run. The OAuth server then rolls out the
+new identity provider, so the first login works about two minutes after the Job completes. You can also read the password with
 `oc get secret lab-user-credentials -n openshell-lab -o jsonpath='{.data.password}' | base64 -d`.
 
 The chart assumes the order's Argo CD controller is cluster-admin, as the field-content examples need. `make
@@ -56,8 +57,32 @@ The chart assumes the order's Argo CD controller is cluster-admin, as the field-
 
 == Provision any other cluster
 
-The same chart, applied by `make -C automation bootstrap`. Use `ZTVP=true` on a cluster without the pattern, or
-`ZTVP=false` (the default) on one that already runs it:
+The same chart, applied by `make -C automation bootstrap`. The cluster needs OpenShift GitOps first; a cluster that
+already runs ZTVP has it. Otherwise install it the way RHDP does (channel `latest`, default instance in
+`openshift-gitops`) and give its controller cluster-admin, as the chart creates operators and ClusterRoleBindings:
+
+[source,bash]
+----
+oc apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata: { name: openshift-gitops-operator }
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata: { name: openshift-gitops-operator, namespace: openshift-gitops-operator }
+spec: { upgradeStrategy: Default }
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata: { name: openshift-gitops-operator, namespace: openshift-gitops-operator }
+spec: { name: openshift-gitops-operator, channel: latest, source: redhat-operators, sourceNamespace: openshift-marketplace }
+EOF
+until oc get argocd openshift-gitops -n openshift-gitops >/dev/null 2>&1; do sleep 10; done
+oc adm policy add-cluster-role-to-user cluster-admin -z openshift-gitops-argocd-application-controller -n openshift-gitops
+----
+
+Then use `ZTVP=true` on a cluster without the pattern, or `ZTVP=false` (the default) on one that already runs it:
 
 [source,bash]
 ----

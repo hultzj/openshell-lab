@@ -13,6 +13,7 @@ expect true '{"items":[{"spec":{"name":"web-terminal"},"metadata":{"annotations"
 expect false '{"items":[{"spec":{"name":"web-terminal"},"metadata":{"labels":{"app.kubernetes.io/part-of":"openshell-lab"}}}]}' '' 'installed by someone else'
 expect false '{"items":[{"spec":{"name":"web-terminal"},"metadata":{"annotations":{"argocd.argoproj.io/tracking-id":"openshell-lab-prereqsX:x"}}}]}' '' 'similar but different Application'
 expect true '{"items":[{"spec":{"name":"other"},"metadata":{}}]}' '' 'only other operators'
+expect false '{"items":[{"spec":{"name":"web-terminal"},"metadata":{"name":"web-terminal","namespace":"openshift-operators"}},{"spec":{"name":"web-terminal"},"metadata":{"name":"old","namespace":"other","labels":{"app.kubernetes.io/instance":"openshell-lab-prereqs"}}}]}' '' 'ours elsewhere does not authorize a foreign one'
 PATH="$tmp:$PATH" OC_STATE=/dev/null OC_MODE=fail bash "$here/../web-terminal-install.sh" openshell-lab >/dev/null 2>&1 && { echo "FAIL: succeeded although oc failed"; fail=1; }
 [[ $fail == 0 ]] && echo PASS
 exit $fail

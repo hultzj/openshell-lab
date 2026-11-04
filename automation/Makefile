@@ -32,6 +32,8 @@ help:
 # the recipe: after backslash-newline joining, a shell comment would swallow the rest of it.
 bootstrap:
 	@set -euo pipefail; \
+	oc get crd applications.argoproj.io >/dev/null 2>&1 && oc get argocd -n "$(GITOPS_NS)" -o name 2>/dev/null | grep -q . || \
+	  { echo "no Argo CD instance in $(GITOPS_NS): install OpenShift GitOps first (Facilitator Guide, 'Provision any other cluster')" >&2; exit 1; }; \
 	[[ "$(REVISION)" =~ ^[A-Za-z0-9._/-]+$$ ]] || { echo "REVISION '$(REVISION)' has unsafe characters" >&2; exit 1; }; \
 	[[ "$(ZTVP)" == true || "$(ZTVP)" == false ]] || { echo "ZTVP must be true or false" >&2; exit 1; }; \
 	vrev=$$(awk '/^gitops:/ {g = 1} g && $$1 == "revision:" {v = $$2; gsub(/["\047]/, "", v); print v; exit}' "$(REPO_DIR)/values.yaml"); \
