@@ -42,7 +42,9 @@ The order creates one Argo CD Application, `field-content`, in `openshift-gitops
   minutes after the order completes.
 | `field-content-prereqs`
 | Subscribes the Web Terminal operator, and the Job `participant-setup` creates `{lab_user}` (identity provider
-  `openshell-lab-htpasswd`, cluster-admin) with a random password.
+  `openshell-lab-htpasswd`, cluster-admin) with a random password. Raises the node's pod limit from 250 to 500
+  (`prereqs.maxPods`): a single-node order with OpenShift AI and the pattern runs about 260 pods, and past the limit
+  the participant's Web Terminal cannot start. The change reboots the node once, during provisioning.
 | `field-content-showroom`
 | Deploys this guide from the same repository and revision.
 |===

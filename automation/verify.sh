@@ -101,6 +101,23 @@ csv_succeeded() { oc get csv -n openshift-operators -o jsonpath='{range .items[*
 idp_present() { oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}' | tr ' ' '\n' | grep -qx openshell-lab-htpasswd; }
 eso_store_ready() { [[ $(oc get clustersecretstore vault-backend -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}') == True ]]; }
 url_ok() { curl -fsSL --max-time 20 -r 0-0 -o /dev/null "$1"; }   # one byte: proves the object itself is served
+# The participant's Web Terminal and the lab's own pods (gateway, supervisor, sandbox, Jobs) need about 10 more.
+# Only nodes that take ordinary pods count (not cordoned, no NoSchedule/NoExecute taint); pods still waiting
+# for a node use up room too.
+pod_headroom() {
+  local nodes pods
+  nodes=$(oc get nodes -o jsonpath='{range .items[*]}{.metadata.name} {.status.allocatable.pods} u={.spec.unschedulable} t={.spec.taints[*].effect}{"\n"}{end}') || return 1
+  pods=$(oc get pods -A --field-selector=status.phase!=Succeeded,status.phase!=Failed -o jsonpath='{range .items[*]}n={.spec.nodeName}{"\n"}{end}') || return 1
+  # One stream: pod lines start with "n=" (no node name contains "="), the rest are node lines.
+  printf '%s\n%s\n' "$nodes" "$pods" | awk '
+    $0 == "n=" { pending++; next }
+    /^n=/ { used[substr($0, 3)]++; next }
+    NF && $3 != "u=true" && $0 !~ /(t=| )(NoSchedule|NoExecute)( |$)/ { cap[$1] = $2 }
+    END {
+      for (node in cap) { if (cap[node] > used[node]) free += cap[node] - used[node]; ok = 1 }
+      exit !(ok && free - pending >= 10)
+    }'
+}
 maas_reachable() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://maas-rhdp.apps.maas.redhatworkshops.io/v1/models"); [[ $c == 401 || $c == 200 ]]; }
 
 check "Argo CD controller ($GITOPS_NS) is cluster-admin (the chart creates operators and ClusterRoleBindings)" controller_admin
@@ -110,6 +127,7 @@ check "Vault is running" oc -n vault wait pod/vault-0 --for=condition=Ready --ti
 check "ClusterSecretStore vault-backend is Ready" eso_store_ready
 check "Keycloak admin secret exists" oc -n keycloak-system get secret keycloak-admin-user
 check "Web Terminal operator Succeeded" csv_succeeded web-terminal
+check "nodes have room for 10 more pods (Web Terminal and lab pods)" pod_headroom
 job_checks "$SETUP_NS" participant-setup "participant user created (Job participant-setup)"
 has_job "$SETUP_NS" participant-setup && check "participant credentials stored (Secret lab-user-credentials)" oc get secret lab-user-credentials -n "$SETUP_NS"
 check "identity provider openshell-lab-htpasswd configured" idp_present

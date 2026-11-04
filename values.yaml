@@ -58,6 +58,10 @@ prereqs:
     channel: fast
   participant:
     username: lab-admin
+  # Kubelet pod limit for the master pool (the single node of an SNO order); 0 leaves the default 250.
+  # An SNO RHDP order with RHOAI and the pattern runs ~260 pods. Applying it reboots the node once.
+  # make bootstrap sets 0, so an existing cluster is not rebooted unasked.
+  maxPods: 500
 
 showroom:
   enabled: true

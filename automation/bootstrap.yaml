@@ -34,6 +34,8 @@ spec:
         prereqs:
           webTerminal:
             install: WEB_TERMINAL_INSTALL
+          # Raising the pod limit reboots the node; set 500 here for a single node that runs out of pods.
+          maxPods: 0
   destination:
     server: https://kubernetes.default.svc
     namespace: GITOPS_NS

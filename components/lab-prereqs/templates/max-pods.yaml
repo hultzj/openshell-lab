@@ -1,0 +1,15 @@
+{{- if .Values.prereqs.maxPods }}
+# Raise the kubelet pod limit (default 250). On a single-node RHDP order the base install, RHOAI and the
+# pattern (ACM alone runs ~80 pods) passed 250, and the participant's Web Terminal could not schedule.
+# The master pool is the single node's pool; the MachineConfig rollout reboots that node once.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: KubeletConfig
+metadata:
+  name: openshell-lab-max-pods
+spec:
+  machineConfigPoolSelector:
+    matchLabels:
+      pools.operator.machineconfiguration.openshift.io/master: ""
+  kubeletConfig:
+    maxPods: {{ int .Values.prereqs.maxPods }}
+{{- end }}
