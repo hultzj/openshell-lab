@@ -88,7 +88,14 @@ ztvp_healthy() {
 }
 # The newest Job with this app.kubernetes.io/name label succeeded (Job names carry a hash of their spec).
 job_complete() { [[ $(oc get jobs -n "$1" -l "app.kubernetes.io/name=$2" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].status.succeeded}' 2>/dev/null) == 1 ]]; }
-has_job() { oc get jobs -n "$1" -l "app.kubernetes.io/name=$2" -o name 2>/dev/null | grep -q .; }
+# 0: a Job with the label exists; 1: none (the component is not deployed); 2: the API call failed.
+has_job() { local out; out=$(oc get jobs -n "$1" -l "app.kubernetes.io/name=$2" -o name 2>/dev/null) || return 2; [[ -n $out ]]; }
+job_checks() {  # job_checks <ns> <label> <title>: check the Job when deployed; an API error is a FAIL, not a skip
+  has_job "$1" "$2"; case $? in
+    0) check "$3" job_complete "$1" "$2" ;;
+    2) check "can list Jobs in $1 (for $3)" false ;;
+  esac
+}
 controller_admin() { oc auth can-i '*' '*' --all-namespaces --as "system:serviceaccount:$GITOPS_NS:$GITOPS_NS-argocd-application-controller"; }
 csv_succeeded() { oc get csv -n openshift-operators -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{"\n"}{end}' | grep -q "^$1.* Succeeded$"; }
 idp_present() { oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}' | tr ' ' '\n' | grep -qx openshell-lab-htpasswd; }
@@ -98,17 +105,13 @@ maas_reachable() { local c; c=$(curl -s -o /dev/null -w '%{http_code}' --max-tim
 
 check "Argo CD controller ($GITOPS_NS) is cluster-admin (the chart creates operators and ClusterRoleBindings)" controller_admin
 check "ZTVP Argo CD applications are Synced/Healthy" ztvp_healthy
-if has_job patterns-operator ztvp-load-secrets; then
-  check "ZTVP secrets loaded into Vault (Job ztvp-load-secrets)" job_complete patterns-operator ztvp-load-secrets
-fi
+job_checks patterns-operator ztvp-load-secrets "ZTVP secrets loaded into Vault (Job ztvp-load-secrets)"
 check "Vault is running" oc -n vault wait pod/vault-0 --for=condition=Ready --timeout=10s
 check "ClusterSecretStore vault-backend is Ready" eso_store_ready
 check "Keycloak admin secret exists" oc -n keycloak-system get secret keycloak-admin-user
 check "Web Terminal operator Succeeded" csv_succeeded web-terminal
-if has_job "$SETUP_NS" participant-setup; then
-  check "participant user created (Job participant-setup)" job_complete "$SETUP_NS" participant-setup
-  check "participant credentials stored (Secret lab-user-credentials)" oc get secret lab-user-credentials -n "$SETUP_NS"
-fi
+job_checks "$SETUP_NS" participant-setup "participant user created (Job participant-setup)"
+has_job "$SETUP_NS" participant-setup && check "participant credentials stored (Secret lab-user-credentials)" oc get secret lab-user-credentials -n "$SETUP_NS"
 check "identity provider openshell-lab-htpasswd configured" idp_present
 check "$LAB_USER can create CRDs (cluster-admin)" oc auth can-i create customresourcedefinitions "${AS_USER[@]}"
 check "$LAB_USER can read the Keycloak admin secret" oc auth can-i get secrets -n keycloak-system "${AS_USER[@]}"

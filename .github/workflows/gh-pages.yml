@@ -29,7 +29,10 @@ jobs:
         run: bash scripts/check-lab.sh
       - name: automation self-tests
         run: |
+          # python3-bcrypt: the in-cluster participant Job hashes with it (its image has no htpasswd).
+          python3 -m pip install --quiet bcrypt
           bash automation/tests/participant-user-test.sh
+          NO_HTPASSWD=1 bash automation/tests/participant-user-test.sh
           bash automation/tests/setup-participant-test.sh
           bash automation/tests/web-terminal-install-test.sh
       - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
