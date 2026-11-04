@@ -130,7 +130,10 @@ Every line must print `PASS`. Fix any `FAIL` before participants arrive.
 * Share the Showroom URL (`oc -n {showroom_namespace} get route showroom`), the console URL, the `{lab_user}`
   password (from the Secret above) and a MaaS API key per participant.
 * Check that the keys can use the model the guide names: `curl -s https://{maas_host}/v1/models -H "Authorization: Bearer <key>"`.
-  If the model differs from `{maas_model}`, change `maas_model` in `content/antora.yml` on an event branch.
+  The model must drive the agent's tools, so do not just switch `maas_model` to whatever a key allows. The key on an
+  RHDP order page is limited to the model picked in the order form (`llama-scout-17b` by default): with it the agent
+  answers prompts but never creates files, so Module 3 fails. Pick `{maas_model}` in the order form if it is offered,
+  or hand out keys for `{maas_model}`. Any other model needs a full run of the guide before class.
 * The Web Terminal stops when idle and loses its home directory; participants re-run the setup block on the
   prerequisites page.
 * ZTVP's Compliance Operator remediation sets `accessTokenInactivityTimeout: 10m` on the cluster OAuth config, so a
