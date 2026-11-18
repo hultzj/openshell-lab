@@ -1,0 +1,108 @@
+= 前提条件与环境
+:navtitle: 前提条件与环境
+
+== 您需要准备什么
+
+[cols="1,2",options="header"]
+|===
+| 如果您是… | 您需要
+
+| 每位参与者
+| 一个浏览器、OpenShift 用户 `{lab_user}` 及其密码，以及一个红帽 MaaS API 密钥（`sk-…`）
+
+| 讲师
+| 一个按照 xref:modules::92-facilitator-guide.adoc[讲师指南（英文）] 准备好的集群
+|===
+
+由讲师提供：
+
+* OpenShift Web 控制台 URL（显示在下方的访问详情表中）。
+* `{lab_user}` 的密码。该 OpenShift 用户在这个专用集群上拥有 cluster-admin 权限。
+* 一个可以使用模型 `{maas_model}` 的 MaaS API 密钥。
+
+集群上已经运行了零信任验证模式（Vault、External Secrets Operator、Keycloak、SPIFFE/SPIRE、Advanced Cluster Security）和 OpenShift Web Terminal。您无需部署其中任何一项。
+
+IMPORTANT: 本实验会安装一个自定义资源定义（CRD）和一个集群范围的 Helm Chart 仓库，并读取 Keycloak 管理员
+Secret。这就是您需要使用 cluster-admin 用户的原因，也是 Showroom 页面没有内置终端的原因：任何拥有
+Showroom URL 的人都可以使用该终端。
+
+== 打开 Web Terminal
+
+本实验中的所有命令都在 OpenShift Web Terminal 中运行。Web Terminal 是浏览器中的一个 shell，并且已经以您的身份登录。
+
+. 打开控制台：link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^]。
+. 在登录页面上，点击 *openshell-lab-htpasswd*，然后以 `{lab_user}` 身份登录。
+. 在顶部标题栏中，点击 *Command line terminal*（命令行终端）图标（`>_`）。
+. 在 *Initialize terminal*（初始化终端）下，将 *Project*（项目）保留为 `openshift-terminal`，然后点击 *Start*（启动）。
+
+预期结果: 一个标题为 *OpenShift command line terminal*（OpenShift 命令行终端）的面板打开，并显示提示符 `bash-5.1 ~ $`。
+
+video::../../modules/_images/02-web-terminal.mp4[width=800,poster=../../modules/_images/02-web-terminal-poster.jpg,title="以 lab-admin 身份登录并启动 Web Terminal（在实验集群上录制）"]
+
+image::modules::02-web-terminal.png[Core platform 视角下的 OpenShift 控制台，底部打开了命令行终端，其中 oc whoami 输出 lab-admin]
+
+NOTE: Web Terminal 在一段时间不活动后会停止，并且不会保留其主目录。如果您的终端重新启动，请再次运行下面的设置代码块。重复运行是安全的。此集群的合规设置还会在 10 分钟无活动后使登录过期：如果 `oc` 报告 `Unauthorized`，请关闭终端面板，然后从顶部标题栏重新打开它（如有需要，先重新加载控制台页面），再运行设置代码块。
+
+== 设置终端
+
+此代码块会安装 OpenShell CLI {openshell_version}（与网关版本相同），校验其校验和，将 CLI 指向网关的集群内 Service（Web Terminal 运行在集群内部），并将 Chart 仓库添加到 Helm。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+mkdir -p ~/bin && cd /tmp
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-x86_64-unknown-linux-musl.tar.gz
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-checksums-sha256.txt
+grep ' openshell-x86_64-unknown-linux-musl.tar.gz$' openshell-checksums-sha256.txt | sha256sum -c - \
+  && tar -xzf openshell-x86_64-unknown-linux-musl.tar.gz -C ~/bin openshell; cd ~
+cat > ~/.openshell-lab.env <<'ENV'
+export PATH=$HOME/bin:$PATH
+export OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080
+export OPENSHELL_GATEWAY_INSECURE=true
+ENV
+grep -q openshell-lab.env ~/.bashrc || echo 'source ~/.openshell-lab.env' >> ~/.bashrc
+source ~/.openshell-lab.env
+helm repo add openshell-ztm-demo {chart_repo_url} --force-update >/dev/null
+openshell --version
+----
+
+预期结果: `openshell-x86_64-unknown-linux-musl.tar.gz: OK`（下载内容与发布的校验和一致），然后是
+`openshell {openshell_version}`。只有在校验和匹配时才会解压归档文件；如果不匹配，您会看到 `FAILED`，并且不会有 `openshell` 二进制文件。
+
+== 运行预检
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc whoami
+oc auth can-i create customresourcedefinitions
+oc auth can-i get secrets -n keycloak-system
+oc get pods -n vault vault-0 --no-headers
+oc get clustersecretstore vault-backend --no-headers
+----
+
+预期结果: 先输出 `{lab_user}`，然后输出两次 `yes`（关于集群范围的 CRD 警告无害），接着是状态为 `1/1 Running`
+的 `vault-0`，以及显示 `Valid` 和 `True` 的 `vault-backend`。Vault 和 ClusterSecretStore 是该 Chart
+所集成的 ZTVP 服务；如果缺少其中任何一个，请停止操作并告知讲师。
+
+== 访问详情
+
+[cols="1,2",options="header"]
+|===
+| 设置 | 值
+
+| OpenShift 控制台
+| link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^]
+
+| 实验命名空间
+| `{lab_namespace}`
+
+| Helm 发行版本
+| `{release_name}`
+
+| 沙箱
+| `{sandbox_name}`
+
+| MaaS 端点和模型
+| `https://{maas_host}/v1`、`{maas_model}`
+|===
+
+继续进入 xref:03-module-01-deploy.adoc[模块 1：从目录部署 OpenShell]。

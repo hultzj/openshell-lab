@@ -69,7 +69,7 @@ echo "demo-engineer password: $DEMO_PW"
 ----
 
 Expected result: `create user: HTTP 201`, `enable device grant: HTTP 204`, and on the last line
-`demo-engineer password: ` followed by 16 hexadecimal characters (keep it for Exercise 3; it exists only in your shell
+``demo-engineer password: `` followed by 16 hexadecimal characters (keep it for Exercise 3; it exists only in your shell
 and in Keycloak, and the cleanup page deletes the user).
 
 == Exercise 3: Sign in, and see the token rejected

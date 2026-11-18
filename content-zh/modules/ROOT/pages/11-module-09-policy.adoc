@@ -1,0 +1,101 @@
+= 模块 9：动态策略
+:navtitle: 模块 9：动态策略
+
+代理的需求会不断变化：新任务需要新的软件包索引。如果每次更改都意味着重新部署沙箱，各团队就会一开始便要求宽泛的规则。本模块回答：**能否在正在运行的代理上，为某一个程序授予并撤销对某一个目标的访问，并证明这两项操作都已生效？**
+
+您将确认 `pypi.org` 被阻止，仅为 `curl` 允许访问它，证明其生效，然后撤销。
+
+.初次接触 OpenShell 策略版本？
+[%collapsible]
+====
+* *策略版本* — 每次更改都会创建一个新的编号版本；监管程序会实时加载它。
+* *哈希* — 策略内容的指纹；内容相同则哈希相同。
+* *`--wait`* — CLI 只有在沙箱报告已加载新版本后才会返回。
+====
+
+== 技术背景
+
+`openshell policy update` 会在沙箱已存储的策略中添加或删除端点。网关将新版本发送给监管程序，监管程序在不重启沙箱的情况下将其换入。`openshell policy list` 会保留历史记录。
+
+== 学习目标
+
+* 读取有效策略及其版本历史记录。
+* 为单个二进制文件添加端点并进行验证，包括验证仍被阻止的二进制文件。
+* 撤销该端点，并在不重启 pod 的情况下验证拒绝行为已恢复。
+
+== 练习 1：确认初始状态
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org/simple/requests/; echo "exit=$?"'
+openshell policy list {sandbox_name}
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+预期结果: `Failed to connect to pypi.org port 443 after 3 ms` 和 `exit=7`；历史记录显示最新版本为
+`Loaded`；以及 `restarts=0` 和该 pod 的 `uid=…`（请记下它，供练习 3 使用）。
+
+TIP: `openshell policy get {sandbox_name} --full` 会打印完整的策略，包括模块 4 中的网络规则。
+
+== 练习 2：为 curl 允许 pypi.org
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --add-endpoint "pypi.org:443:read-write" --binary /usr/bin/curl --wait
+----
+
+预期结果: 在几秒钟内显示 `✓ Policy version N submitted`，然后显示 `✓ Policy version N loaded (active version: N)`。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w "curl -> pypi.org HTTP %\{http_code}\n" --max-time 5 https://pypi.org/simple/requests/
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e 'fetch("https://pypi.org/simple/requests/").then(r=>console.log("node -> pypi.org HTTP",r.status)).catch(e=>console.log("node -> pypi.org ERR",e.cause?e.cause.code:e.message))'
+----
+
+预期结果: `curl -> pypi.org HTTP 200` 和 `node -> pypi.org ERR EACCES`。新规则只指定了 `curl`，因此 `node` 仍然被拒绝。
+
+video::../../modules/_images/m9-policy.mp4[width=800,poster=../../modules/_images/m9-policy-poster.jpg,title="在正在运行的沙箱上允许并撤销 pypi.org（在实验集群上录制）"]
+
+== 练习 3：撤销
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --remove-endpoint pypi.org:443 --wait
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org; echo "exit=$?"'
+openshell policy list {sandbox_name} | head -4
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+预期结果: 新版本显示为 `loaded`；显示 `Failed to connect to pypi.org` 和 `exit=7`；最新版本的哈希与您更改之前的版本相同（策略已恢复为完全相同的内容）；并且仍然是 `restarts=0`，`uid` 与练习 1 中相同：仍是同一个 pod，从未被重启或替换。
+
+简而言之：一个端点、一个二进制文件，实时授予并撤销，且历史记录完整保留。
+
+.本练习的脚本化断言
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: sandbox probe did not run (github.com returned '$out')"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://pypi.org >/dev/null 2>&1 && { echo "FAIL: pypi.org still reachable"; exit 1; }
+  [ "$(oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='{.status.containerStatuses[0].restartCount}')" = 0 ] || { echo "FAIL: sandbox restarted"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 证据检查点
+
+* 您如何知道沙箱没有为了应用更改而重启？
+* 还原之后，您如何判断策略内容与之前完全相同？
+
+.答案
+[%collapsible]
+====
+* 该 pod 的 `restartCount` 保持为 `0`，其 `uid` 没有变化（被替换的 pod 会获得新的 UID），并且 CLI
+  报告该版本已由正在运行的沙箱加载。
+* 最新版本的哈希与更改之前那个版本的哈希相同。
+====
+
+继续进入 xref:90-cleanup.adoc[清理]。

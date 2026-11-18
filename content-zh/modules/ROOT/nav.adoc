@@ -1,0 +1,25 @@
+* xref:index.adoc[简介]
+* xref:01-overview.adoc[架构与控制边界]
+* xref:02-details.adoc[前提条件与环境]
+
+.部署与连接（11 分钟）
+* xref:03-module-01-deploy.adoc[模块 1：部署 OpenShell]
+* xref:04-module-02-client.adoc[模块 2：连接 CLI]
+
+.验证安全控制（21 分钟）
+* xref:05-module-03-agent.adoc[模块 3：AI 代理编码]
+* xref:06-module-04-network.adoc[模块 4：网络零信任]
+* xref:07-module-05-filesystem.adoc[模块 5：文件系统零信任]
+* xref:08-module-06-credentials.adoc[模块 6：凭据安全]
+
+.平台集成（16 分钟）
+* xref:09-module-07-ztvp.adoc[模块 7：ZTVP 集成]
+* xref:10-module-08-auth.adoc[模块 8：用户身份验证]
+* xref:11-module-09-policy.adoc[模块 9：动态策略]
+
+.总结
+* xref:90-cleanup.adoc[清理]
+* xref:91-reference.adoc[技术参考]
+
+.讲师
+* xref:modules::92-facilitator-guide.adoc[讲师指南（英文）]

@@ -1,0 +1,152 @@
+= 모듈 7: ZTVP 통합
+:navtitle: 모듈 7: ZTVP 통합
+
+보안 플랫폼은 애플리케이션이 실제로 사용할 때만 쓸모가 있습니다. 이 모듈은 다음 질문에 답합니다. *이 클러스터에서
+OpenShell은 어떤 ZTVP 서비스를 사용하며, 어떤 서비스는 대기 상태로만 준비되어 있는가?*
+
+키를 Vault에서 게이트웨이까지 추적하고, SPIRE가 발급한 워크로드 ID를 찾고, ACS를 열어 본 다음, 차트가 등록한
+Keycloak 클라이언트를 확인합니다.
+
+.ZTVP 서비스가 처음이신가요?
+[%collapsible]
+====
+* *Vault* — 경로별 정책을 갖춘 암호화된 시크릿 저장소입니다.
+* *External Secrets Operator(ESO)* — 일정 주기로 Vault의 값을 Kubernetes 시크릿으로 복사합니다.
+* *SPIFFE ID / SVID* — 워크로드의 ID인 ``spiffe://<trust domain>/ns/<namespace>/sa/<service account>``와 이를 증명하는 인증서입니다.
+* *ClusterSPIFFEID* — 어떤 파드가 어떤 ID를 받을지 SPIRE에 알려 주는 리소스입니다.
+* *ACS* — Red Hat Advanced Cluster Security로, 이미지를 스캔하고 배포 및 런타임 정책을 강제 적용합니다.
+====
+
+== 기술적 배경
+
+[cols="1,2,2",options="header"]
+|===
+| 서비스 | OpenShell이 사용하는 기능 | 이 모듈에서 확인할 증거
+
+| Vault
+| MaaS 키를 저장합니다. 차트의 시드 Job이 키를 씁니다
+| Vault 파드, ExternalSecret 경로
+| External Secrets
+| 키를 1시간마다 ``maas-api-key``로 동기화합니다
+| ExternalSecret `SecretSynced`
+| SPIFFE/SPIRE
+| 서비스 계정별로 ID를 등록합니다
+| ``{lab_namespace}``에 대한 SPIRE 항목
+| ACS
+| 샌드박스를 포함하여 클러스터의 모든 파드를 스캔하고 감시합니다
+| Central Route와 파드
+| Keycloak
+| `openshell-gateway` 클라이언트용 토큰을 발급합니다(모듈 8)
+| 클라이언트 설정
+|===
+
+== 학습 목표
+
+* Vault에서 External Secrets를 거쳐 Kubernetes 시크릿에 이르기까지 키를 추적합니다.
+* SPIRE가 OpenShell의 서비스 계정에 발급한 SPIFFE ID를 확인하고, 누가 이를 사용하는지 설명합니다.
+* ACS Central과 차트가 생성한 Keycloak 클라이언트를 찾습니다.
+
+== 실습 1: Vault에서 키 추적
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n vault -l app.kubernetes.io/name=vault
+oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.spec.data[0].remoteRef.key}{"\n"}'
+oc get clustersecretstore vault-backend -o jsonpath='{.spec.provider.vault.auth.kubernetes.mountPath} {.spec.provider.vault.auth.kubernetes.role}{"\n"}'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+oc get secret maas-api-key -n {lab_namespace} -o jsonpath='{.data.api_key}' | base64 -d | head -c 3; echo "..."
+----
+
+예상 결과: `vault-0  1/1  Running`, 원격 키 `hub/infra/openshell/maas`, 스토어가 마운트 ``hub``에서 역할
+``hub-role``로 로그인함, ExternalSecret에 `vault-backend`, `1h`, `SecretSynced`, ``True``가 표시되며,
+시크릿은 ``sk-``로 시작합니다.
+
+요약: 두 개의 Vault 역할이 관여합니다. 차트의 시드 Job은 ``openshell-admin``으로 쓰고, ESO는 ZTVP의 ``hub-role``로 읽습니다.
+
+이제 차트가 자신을 위해 생성한 역할을 확인합니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n vault vault-0 -- vault read -format=json auth/hub/role/openshell-admin \
+  | jq -c '.data | {bound_service_account_names, bound_service_account_namespaces, token_policies}'
+oc exec -n vault vault-0 -- vault policy read openshell-admin
+----
+
+예상 결과: 네임스페이스 ``{lab_namespace}``와 정책 `default` 및 ``openshell-admin``이 포함된
+``+"bound_service_account_names":["*"]+``이 표시됩니다. 정책은 `+secret/data/hub/infra/openshell/*+`(및 `+secret/data/openshell/*+`)
+아래에서 `create`, `update`, `read`, `list`, ``delete``를 허용합니다. 샌드박스의 서비스 계정을 포함하여
+네임스페이스의 모든 서비스 계정이 이 역할로 로그인할 수 있습니다. 이 랩에서는 샌드박스가 이 역할을 사용할 수 없습니다.
+샌드박스에서 ``vault.vault.svc``로의 ``curl``은 종료 코드 7로 실패하고, ``/var/run/secrets``는 Landlock 정책 밖에 있기 때문입니다.
+그러나 프로덕션 설치에서는 이 역할을 ``vault-seed-job``에만 바인딩하고 ``delete``를 제거해야 합니다.
+
+== 실습 2: 워크로드 ID 찾기
+
+차트에는 ``openshell-gateway``라는 ClusterSPIFFEID가 포함되어 있습니다. SPIRE가 이를 처리했는지 확인합니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get clusterspiffeid -o custom-columns=NAME:.metadata.name,CLASS:.spec.className,PODS:.status.stats.podsSelected
+----
+
+예상 결과: 클래스가 ``openshift``이고 파드 수가 없는 ``openshell-gateway``와, 클래스가 ``zero-trust-workload-identity-manager-spire``이고
+파드 수가 있는 ZTVP의 ``zero-trust-workload-identity-manager-spire-default``가 함께 표시됩니다. 차트 항목의 클래스가
+일치하지 않으므로 SPIRE는 이를 무시합니다.
+
+그래도 ZTVP의 기본 항목이 모든 서비스 계정에 ID를 부여합니다. SPIRE 서버에 질의합니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n zero-trust-workload-identity-manager spire-server-0 -c spire-server -- \
+  /spire-server entry show -socketPath /tmp/spire-server/private/api.sock | grep -o 'spiffe://.*/ns/{lab_namespace}/.*' | sort -u
+oc get pods -n {lab_namespace} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.volumes[*].csi.driver}{"\n"}\{end}'
+----
+
+예상 결과: `/ns/{lab_namespace}/sa/{release_name}`(게이트웨이), `/sa/{release_name}-sandbox`(샌드박스),
+``/sa/openshell-setup``으로 끝나는 ID가 표시됩니다. 두 번째 명령은 `csi.spiffe.io` 드라이버 없이 파드 이름만 출력합니다.
+SPIRE는 ID를 등록했지만 SPIFFE CSI 볼륨을 마운트한 OpenShell 파드가 없으므로, 이 랩에서는 아직 어떤 것도
+SVID로 인증하지 않습니다.
+
+video::../../modules/_images/m7-ztvp.mp4[width=800,poster=../../modules/_images/m7-ztvp-poster.jpg,title="Vault와 External Secrets를 거치는 키 추적 및 SPIRE가 발급한 ID(랩 클러스터에서 녹화)"]
+
+== 실습 3: ACS Central 열기
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n stackrox -l app=central --no-headers
+oc get route central -n stackrox -o jsonpath='https://{.spec.host}{"\n"}'
+----
+
+예상 결과: `1/1 Running` 상태의 `central-…` 파드 하나와 URL ``https://central-stackrox.{cluster_domain}``이 표시됩니다.
+
+GUI 보기: URL을 엽니다. 로그인 페이지에 *Select an auth provider*(인증 공급자 선택)가 표시되고 **OIDC**를 제공합니다.
+ACS는 ZTVP의 Keycloak을 통해 사용자를 인증하며, 이는 모듈 8에서 게이트웨이가 사용하는 것과 같은 ID 공급자입니다.
+
+== 실습 4: Keycloak 클라이언트 확인
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.[] | {clientId, publicClient, directAccessGrantsEnabled, redirectUris}'
+----
+
+예상 결과: `"clientId": "openshell-gateway"`, `"publicClient": true`, `"directAccessGrantsEnabled": true`,
+그리고 게이트웨이의 Route 호스트 이름(이 랩에서는 생성되지 않음)과 ``http://localhost:*/*``에 대한 리디렉션 URI가 표시됩니다.
+
+== 증거 확인
+
+* 이 랩에서 OpenShell이 실행되기 위해 의존하는 ZTVP 서비스는 무엇이며, 심층 방어 용도로만 쓰이는 서비스는 무엇입니까?
+* 게이트웨이가 SPIFFE ID로 Vault에 인증하려면 무엇이 바뀌어야 합니까?
+
+.정답
+[%collapsible]
+====
+* Vault와 External Secrets가 키를 전달하고(Job에 필요한 것보다 넓은 Vault 역할 사용), Keycloak이 게이트웨이의 사용자 토큰을 발급합니다(모듈 8). SPIRE
+  ID와 ACS는 워크로드를 관찰하고 식별하지만, 요청 경로에서 아직 이들에 의존하는 것은 없습니다.
+* 게이트웨이 파드가 SPIFFE CSI 볼륨을 마운트하고, Vault가 SPIRE를 JWT 또는 인증서 인증 방식으로 신뢰해야 합니다.
+  차트에도 올바른 클래스와 서비스 계정을 지정한 ClusterSPIFFEID가 필요합니다.
+====
+
+xref:10-module-08-auth.adoc[모듈 8: 사용자 인증]으로 진행하십시오.

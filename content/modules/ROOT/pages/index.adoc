@@ -11,6 +11,8 @@ WARNING: This lab uses a *Developer Preview* feature. Developer Preview features
 as-is, with no support and no guarantee of future availability.
 endif::[]
 
+Read this guide in: xref:ja::index.adoc[日本語] | xref:ko::index.adoc[한국어] | xref:zh::index.adoc[简体中文]
+
 Run an autonomous AI coding agent on OpenShift, then prove what it cannot do.
 
 AI coding agents such as link:https://pi.dev/[Pi^] write code, install packages, call APIs and run

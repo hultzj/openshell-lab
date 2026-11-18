@@ -1,0 +1,141 @@
+= モジュール 7: ZTVP 統合
+:navtitle: モジュール 7: ZTVP 統合
+
+セキュリティープラットフォームは、アプリケーションが実際にそれを利用して初めて役に立ちます。このモジュールでは、*このクラスターで OpenShell が使用している ZTVP サービスはどれで、待機しているだけのサービスはどれか?* という問いに答えます。
+
+キーを Vault からゲートウェイまでたどり、SPIRE が発行したワークロード ID を見つけ、ACS を開き、チャートが登録した Keycloak クライアントを読み取ります。
+
+.ZTVP サービスを初めて使用する場合
+[%collapsible]
+====
+* *Vault*: パスごとのポリシーを備えた、暗号化されたシークレットストレージ。
+* *External Secrets Operator (ESO)*: Vault の値を定期的に Kubernetes Secret にコピーします。
+* *SPIFFE ID / SVID*: ワークロードの ID (`spiffe://<trust domain>/ns/<namespace>/sa/<service account>`) と、それを証明する証明書。
+* *ClusterSPIFFEID*: どの Pod にどの ID を付与するかを SPIRE に指示するリソース。
+* *ACS*: Red Hat Advanced Cluster Security。イメージをスキャンし、デプロイ時およびランタイムのポリシーを適用します。
+====
+
+== 技術的な背景
+
+[cols="1,2,2",options="header"]
+|===
+| サービス | OpenShell が使用するもの | このモジュールでの証拠
+
+| Vault
+| MaaS キーを保管します。チャートのシード Job がキーを書き込みます
+| Vault の Pod、ExternalSecret のパス
+| External Secrets
+| キーを 1 時間ごとに `maas-api-key` に同期します
+| ExternalSecret の `SecretSynced`
+| SPIFFE/SPIRE
+| サービスアカウントごとに ID を登録します
+| `{lab_namespace}` の SPIRE エントリー
+| ACS
+| サンドボックスを含め、クラスター上のすべての Pod をスキャンおよび監視します
+| Central の Route と Pod
+| Keycloak
+| `openshell-gateway` クライアント用のトークンを発行します（モジュール 8）
+| クライアント設定
+|===
+
+== 学習目標
+
+* キーを Vault から External Secrets を経由して Kubernetes Secret までたどる。
+* SPIRE が OpenShell のサービスアカウントに発行した SPIFFE ID を読み取り、誰がそれを使用しているかを説明する。
+* ACS Central と、チャートが作成した Keycloak クライアントの場所を特定する。
+
+== 演習 1: Vault からキーをたどる
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n vault -l app.kubernetes.io/name=vault
+oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.spec.data[0].remoteRef.key}{"\n"}'
+oc get clustersecretstore vault-backend -o jsonpath='{.spec.provider.vault.auth.kubernetes.mountPath} {.spec.provider.vault.auth.kubernetes.role}{"\n"}'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+oc get secret maas-api-key -n {lab_namespace} -o jsonpath='{.data.api_key}' | base64 -d | head -c 3; echo "..."
+----
+
+期待される結果: `vault-0  1/1  Running`、リモートキー `hub/infra/openshell/maas`、ストアがマウント `hub` にロール `hub-role` でログインすること、ExternalSecret に `vault-backend`、`1h`、`SecretSynced`、`True` が表示されること、そして Secret が `sk-` で始まることが確認できます。
+
+まとめ: 2 つの Vault ロールが関与しています。チャートのシード Job は `openshell-admin` で書き込み、ESO は ZTVP の `hub-role` で読み取ります。
+
+次に、チャートが自身のために作成したロールを読み取ります。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n vault vault-0 -- vault read -format=json auth/hub/role/openshell-admin \
+  | jq -c '.data | {bound_service_account_names, bound_service_account_namespaces, token_policies}'
+oc exec -n vault vault-0 -- vault policy read openshell-admin
+----
+
+期待される結果: `+"bound_service_account_names":["*"]+`、namespace `{lab_namespace}`、ポリシー `default` と
+`openshell-admin` が表示されます。ポリシーは `+secret/data/hub/infra/openshell/*+`（および `+secret/data/openshell/*+`）の配下で
+`create`、`update`、`read`、`list`、`delete` を許可します。サンドボックスのものを含め、この namespace 内のどのサービスアカウントでも、このロールでログインできます。このラボではサンドボックスはこのロールを使用できません。サンドボックスから `vault.vault.svc` への `curl` は終了コード 7 で失敗し、`/var/run/secrets` はサンドボックスの Landlock ポリシーの対象外だからです。ただし、本番環境のインストールでは、ロールを `vault-seed-job` のみにバインドし、`delete` を削除する必要があります。
+
+== 演習 2: ワークロード ID を見つける
+
+チャートには `openshell-gateway` という名前の ClusterSPIFFEID が含まれています。SPIRE がそれに基づいて動作したかどうかを確認します。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get clusterspiffeid -o custom-columns=NAME:.metadata.name,CLASS:.spec.className,PODS:.status.stats.podsSelected
+----
+
+期待される結果: クラス `openshift` で Pod 数のない `openshell-gateway` と、その隣に、クラス `zero-trust-workload-identity-manager-spire`
+で Pod 数のある ZTVP の `zero-trust-workload-identity-manager-spire-default` が表示されます。クラスが一致しないため、SPIRE はチャートのエントリーを無視します。
+
+それでも、ZTVP のデフォルトエントリーによって、すべてのサービスアカウントに ID が付与されます。SPIRE サーバーに問い合わせます。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n zero-trust-workload-identity-manager spire-server-0 -c spire-server -- \
+  /spire-server entry show -socketPath /tmp/spire-server/private/api.sock | grep -o 'spiffe://.*/ns/{lab_namespace}/.*' | sort -u
+oc get pods -n {lab_namespace} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.volumes[*].csi.driver}{"\n"}\{end}'
+----
+
+期待される結果: `/ns/{lab_namespace}/sa/{release_name}`（ゲートウェイ）、`/sa/{release_name}-sandbox`
+（サンドボックス）、および `/sa/openshell-setup` で終わる ID が表示されます。2 つ目のコマンドは、`csi.spiffe.io` ドライバーのない Pod 名を出力します。SPIRE は ID を登録していますが、SPIFFE CSI ボリュームをマウントしている OpenShell の Pod はないため、このラボではまだ
+SVID で認証しているものはありません。
+
+video::../../modules/_images/m7-ztvp.mp4[width=800,poster=../../modules/_images/m7-ztvp-poster.jpg,title="Vault と External Secrets を通じてキーをたどり、SPIRE が発行した ID を確認する（ラボクラスターで録画）"]
+
+== 演習 3: ACS Central を開く
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n stackrox -l app=central --no-headers
+oc get route central -n stackrox -o jsonpath='https://{.spec.host}{"\n"}'
+----
+
+期待される結果: `1/1 Running` の `central-…` Pod が 1 つと、URL `https://central-stackrox.{cluster_domain}` が表示されます。
+
+GUI での表示: URL を開きます。ログインページには *Select an auth provider*（認証プロバイダーの選択）と表示され、*OIDC* が選択肢として示されます。ACS は
+ZTVP の Keycloak を通じてユーザーを認証します。これは、モジュール 8 でゲートウェイが使用するのと同じ ID プロバイダーです。
+
+== 演習 4: Keycloak クライアントを読み取る
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.[] | {clientId, publicClient, directAccessGrantsEnabled, redirectUris}'
+----
+
+期待される結果: `"clientId": "openshell-gateway"`、`"publicClient": true`、`"directAccessGrantsEnabled": true`、および、ゲートウェイの Route が作成された場合のホスト名（このラボでは作成されません）と `http://localhost:*/*` のリダイレクト URI が表示されます。
+
+== 証拠のチェックポイント
+
+* このラボで OpenShell が実行に依存している ZTVP サービスはどれで、多層防御のためだけのものはどれですか?
+* ゲートウェイが SPIFFE ID を使用して Vault に認証するには、何を変更する必要がありますか?
+
+.解答
+[%collapsible]
+====
+* Vault と External Secrets がキーを運びます（Job が必要とする以上に広い権限の Vault ロールを使用しています）。Keycloak はゲートウェイのユーザートークンを発行します（モジュール 8）。SPIRE の
+  ID と ACS はワークロードを監視および識別しますが、リクエストの経路でそれらに依存しているものはまだありません。
+* ゲートウェイ Pod が SPIFFE CSI ボリュームをマウントし、Vault が SPIRE を JWT または証明書の認証方式として信頼する必要があります。また、チャートには正しいクラスとサービスアカウントを指定した ClusterSPIFFEID も必要です。
+====
+
+xref:10-module-08-auth.adoc[モジュール 8: ユーザー認証] に進んでください。

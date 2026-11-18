@@ -1,0 +1,84 @@
+= モジュール 2: OpenShell CLI を接続する
+:navtitle: モジュール 2: CLI の接続
+
+以降のすべてのモジュールではゲートウェイを介してサンドボックスを操作するため、CLI はゲートウェイに到達できる必要があり、それ以外の誰も到達できてはなりません。このモジュールでは、*クライアントはどのようにゲートウェイを見つけて信頼するのか、また、ほかに誰がゲートウェイに到達できるのか?* という問いに答えます。
+
+ゲートウェイのクラスター内 Service を介してサンドボックスを一覧表示し、CLI が何を拒否するかを確認します。さらに、ゲートウェイがインターネットからも別の namespace からも到達できないことを確認します。
+
+.OpenShell CLI を初めて使用する場合
+[%collapsible]
+====
+* *ゲートウェイエンドポイント*: CLI が gRPC で通信する HTTPS URL。ここではゲートウェイの Kubernetes Service です。
+* *gRPC*: HTTP/2 上で動作するバイナリー形式のリモートプロシージャーコールプロトコル。
+* *Insecure モード*: 証明書の検証を行わない暗号化 TLS。ゲートウェイの証明書がチャート独自の CA から発行されているため使用します。
+* *NetworkPolicy*: どの Pod がどの Pod に接続できるかを制限する Kubernetes のルール。
+====
+
+== 技術的な背景
+
+前提条件のページのセットアップブロックは、`~/.openshell-lab.env` に 2 つの変数を書き込みました。`OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080`（Service。エンドポイントには `https://` を含める必要があります）と `OPENSHELL_GATEWAY_INSECURE=true` です。Web Terminal はクラスター内で実行されるため、Service に直接到達します。コマンドの経路は、CLI → ゲートウェイ Service (TLS) → ゲートウェイ Pod → スーパーバイザー →
+サンドボックスです。モジュール 1 では、Route なしでインストールし、NetworkPolicy `gateway-ingress` を追加しました。
+
+== 学習目標
+
+* ゲートウェイを介してサンドボックスを一覧表示し、サンドボックスのフェーズを読み取る。
+* エンドポイントにスキームを含める必要がある理由と、Insecure モードを設定する理由を説明する。
+* ゲートウェイにパブリックエンドポイントがなく、他の namespace からの接続を拒否することを示す。
+
+== 演習 1: ゲートウェイを介してサンドボックスを一覧表示する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+source ~/.openshell-lab.env
+echo "$OPENSHELL_GATEWAY_ENDPOINT"
+oc get service {release_name} -n {lab_namespace}
+openshell sandbox list
+----
+
+期待される結果: エンドポイント `https://{release_name}.{lab_namespace}.svc.cluster.local:8080`、タイプ `ClusterIP` でポート `8080/TCP` の
+Service `{release_name}` が表示され、一覧にはフェーズ `Ready` の `{sandbox_name}` が表示されます。CLI は `WARN … TLS certificate verification is disabled` という行も出力します。これは設定した Insecure モードによるものです。
+
+== 演習 2: CLI が何を拒否するかを確認する
+
+NOTE: 以下のコマンドはどちらも失敗します。これは想定どおりで、それぞれが CLI の適用するルールを 1 つずつ示しています。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+OPENSHELL_GATEWAY_ENDPOINT=${OPENSHELL_GATEWAY_ENDPOINT#https://} openshell sandbox list; echo "exit=$?"
+OPENSHELL_GATEWAY_INSECURE=false openshell sandbox list; echo "exit=$?"
+----
+
+期待される結果: 1 つ目は `gateway URL must start with http:// or https://` と `exit=1` で失敗します。2 つ目は `failed to read TLS CA from …/mtls/ca.crt` と `exit=1` で失敗します。検証が有効な場合、CLI は一度も渡されていない CA を探し、証明書を信頼するのではなく処理を停止します。
+
+まとめ: CLI は、不正なエンドポイントや検証できない証明書に対して、安全側に倒れて (fail closed) 失敗します。
+
+== 演習 3: ほかに誰がゲートウェイに到達できるかを確認する
+
+NOTE: 以下のプローブは接続に失敗することが想定されています。それが期待どおりの結果です。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get route -n {lab_namespace}
+oc run gateway-probe -n default --rm -i --restart=Never --quiet --image=registry.access.redhat.com/ubi9/ubi-minimal -- \
+  curl -sk -o /dev/null --max-time 5 -w '%\{http_code}\n' https://{release_name}.{lab_namespace}.svc.cluster.local:8080; echo "exit=$?"
+----
+
+期待される結果: `No resources found in {lab_namespace} namespace.`（パブリック Route なし）が表示され、続いて
+`default` namespace のプローブ Pod が `000` と `exit=28`（curl のタイムアウト）を出力します。NetworkPolicy がゲートウェイへの接続を破棄したことを示しています。一方、同じ Service は演習 1 で Web Terminal には応答しました。
+
+video::../../modules/_images/m2-gateway-access.mp4[width=800,poster=../../modules/_images/m2-gateway-access-poster.jpg,title="CLI を接続し、別の namespace からゲートウェイをプローブする（ラボクラスターで録画）"]
+
+== 証拠のチェックポイント
+
+* `default` の Pod はゲートウェイに到達できないのに、Web Terminal は到達できるのはなぜですか?
+* 本番環境では、Insecure モードの代わりに何を構成しますか?
+
+.解答
+[%collapsible]
+====
+* NetworkPolicy `gateway-ingress` が、`{lab_namespace}` と `openshift-terminal` からの接続のみを許可しているためです。
+* CLI が検証できる証明書（クライアントに配布されたゲートウェイの CA）を構成して `OPENSHELL_GATEWAY_INSECURE`
+  を未設定のままにできるようにし、さらに匿名アクセスの代わりにゲートウェイ認証（モジュール 8）を構成します。
+====
+
+xref:05-module-03-agent.adoc[モジュール 3: Pi による AI エージェントコーディング] に進んでください。

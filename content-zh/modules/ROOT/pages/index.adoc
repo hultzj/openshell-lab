@@ -1,0 +1,108 @@
+= OpenShell 与零信任：在 OpenShift 上保护 AI 代理
+:navtitle: 简介
+
+ifeval::["{feature_maturity}" == "TP"]
+WARNING: 本实验使用了**技术预览**功能。红帽生产服务级别协议（SLA）不支持技术预览功能，这些功能在功能上可能并不完整。
+endif::[]
+ifeval::["{feature_maturity}" == "DP"]
+WARNING: 本实验使用了**开发者预览**功能。开发者预览功能按“原样”提供，不提供支持，也不保证将来一定可用。
+endif::[]
+
+其他语言版本: xref:modules::index.adoc[English] | xref:ja::index.adoc[日本語] | xref:ko::index.adoc[한국어]
+
+NOTE: 本译文在 AI 辅助下完成。如与英文版有任何出入，以英文指南为准。控制台标签保留英文；如需与之对应，请在 OpenShift 控制台的用户菜单 > *User Preferences*（用户偏好设置）> *Language*（语言）中将语言设置为英语。
+
+在 OpenShift 上运行一个自主 AI 编码代理，然后证明它无法做哪些事情。
+
+link:https://pi.dev/[Pi^] 等 AI 编码代理会自行编写代码、安装软件包、调用 API 并运行程序。因此，不受约束的代理可以把您的源代码发送到任何服务器，读取其容器中的任何文件，并泄露交给它的
+LLM API 密钥。本实验在一个已运行红帽零信任验证模式（Zero Trust Validated Pattern，ZTVP）的集群上，将 Pi 代理运行在 NVIDIA OpenShell 沙箱中，并请您亲自验证每一项限制，而不是想当然地相信它们。
+
+本实验依次完成以下任务：
+
+. 在 Developer Catalog（开发者目录）中注册 OpenShell 的 Helm Chart 并进行安装，其 API 密钥保存在 Vault 中，且不提供公共端点。
+. 将 OpenShell CLI 连接到网关。
+. 观察 Pi 通过红帽 MaaS LLM 编写并运行代码。
+. 证明沙箱只能访问三个经过批准的主机。
+. 证明 Linux 内核（Landlock）限制了代理可以写入的路径。
+. 证明真实的 API 密钥从未进入沙箱。
+. 追踪 Vault、External Secrets、SPIRE、ACS 和 Keycloak 如何与 OpenShell 集成。
+. 为网关的 OIDC 客户端获取 Keycloak 令牌。
+. 更改正在运行的沙箱的网络策略，然后撤销该更改。
+
+== 学习目标
+
+完成本实验后，您将能够：
+
+* 从在 Developer Catalog 中注册的 Helm Chart 仓库，在 OpenShift 上部署 OpenShell，并使其仅可从集群内部访问。
+* 演示代理沙箱中被允许和被拒绝的出站流量，并解释为什么拒绝是即时的。
+* 演示容器内的 Landlock 文件系统强制执行，包括 root 用户通常可以写入的路径。
+* 解释解析器令牌如何使真实的 LLM 凭据始终位于沙箱之外。
+* 找到该 Chart 所配置的 Vault 路径、ExternalSecret、ClusterSPIFFEID 和 Keycloak 客户端。
+* 实时更新沙箱网络策略并验证更改，然后将其还原。
+
+== 如何进行本实验
+
+每个练习都会指明要更改的状态、要检查的证据以及必须验证的结果。不要把命令执行完成当作证明。继续之前，请将观察到的资源、策略或事件与所述的预期结果进行比较。讲师请参阅
+xref:modules::92-facilitator-guide.adoc[讲师指南（英文）]。
+
+每个模块以及 Web Terminal 设置都附有一段简短视频，这些视频是在实验集群上完整执行本指南时录制的。横幅标出每个练习，黄色方框标出证明结果的输出，等待命令完成的部分已加速播放（标记为 *sped up*）。您可以在运行某个步骤之前观看视频了解该步骤，或在自己的输出不同时进行对照。LLM 输出（模块 3）以及生成的名称和时间戳会与您的不同。
+
+== 实验路线图
+
+[cols="1,3,1",options="header"]
+|===
+| 模块 | 成果 | 时间
+
+| 1. 从目录部署 OpenShell
+| 已注册 Chart 仓库，已安装发行版本，沙箱 pod 处于 `Running` 状态
+| 8 分钟
+
+| 2. 连接 OpenShell CLI
+| `openshell sandbox list` 显示 `pi-agent-demo` 处于 `Ready` 阶段
+| 3 分钟
+
+| 3. 使用 Pi 进行 AI 代理编码
+| Pi 通过 MaaS 生成代码；您在沙箱中运行这些代码
+| 6 分钟
+
+| 4. 网络零信任
+| 允许的主机有响应；其他所有主机均被拒绝
+| 5 分钟
+
+| 5. 文件系统零信任
+| 只有在 `/sandbox` 和 `/tmp` 中写入才会成功
+| 5 分钟
+
+| 6. 凭据安全
+| 沙箱中只有一个解析器令牌，而且该令牌只能通过边界使用
+| 5 分钟
+
+| 7. ZTVP 集成
+| 找到并读取 OpenShell 背后的 Vault、ESO、SPIRE、ACS 和 Keycloak 资源
+| 6 分钟
+
+| 8. 用户身份验证
+| Keycloak 用户获得一个受众（audience）为网关的 JWT
+| 6 分钟
+
+| 9. 动态策略
+| 在正在运行的沙箱上允许 `pypi.org`，然后撤销
+| 4 分钟
+|===
+
+**总计：**约 50 分钟。
+
+== 技术模型
+
+* *OpenShift* 运行所有组件，并提供 Developer Catalog、Route 和 Web Terminal。
+* *ZTVP* 提供共享安全服务：Vault（机密）、External Secrets Operator（机密同步）、Keycloak（用户身份）、SPIFFE/SPIRE（工作负载身份）以及 Advanced Cluster Security（镜像和运行时策略）。
+* *OpenShell* 添加了网关、位于代理与网络之间的监管程序（supervisor）以及策略引擎。
+* *Landlock* 是一个 Linux 内核安全模块，负责强制执行沙箱文件系统策略。
+* *Pi* 是被测试的代理，*红帽 MaaS*（Model-as-a-Service，模型即服务）是它调用的 LLM。
+
+任何单独的一层都不足以提供保护。Kubernetes NetworkPolicy 按 pod 而不是按进程生效。Vault 会加密保存机密，但会把机密交给任何有权读取它的人。容器文件系统对 root 不构成任何限制。OpenShell 的按二进制文件出站规则、Landlock 以及在边界侧进行的凭据解析弥补了这些缺口，而 ZTVP 则提供 OpenShell 所使用的身份和机密。
+
+== 从这里开始
+
+阅读 xref:01-overview.adoc[架构与控制边界]，然后在
+xref:02-details.adoc[前提条件与环境] 中验证实验环境。

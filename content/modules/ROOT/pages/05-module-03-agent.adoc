@@ -84,7 +84,7 @@ curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\
 pkill -x node'
 ----
 
-Expected result: `server: ` and the file Pi wrote (for example `/sandbox/server.js`), `npm install` ends with a package count or `up to date`
+Expected result: ``server: `` and the file Pi wrote (for example `/sandbox/server.js`), `npm install` ends with a package count or `up to date`
 (it reached `registry.npmjs.org`), `/health`
 returns `{"status":"ok"}`, `/items` returns three items, and the POST returns the new item with an `id`.
 The exact fields are whatever the model generated.

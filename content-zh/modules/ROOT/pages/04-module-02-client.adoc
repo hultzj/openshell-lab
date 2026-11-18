@@ -1,0 +1,85 @@
+= 模块 2：连接 OpenShell CLI
+:navtitle: 模块 2：连接 CLI
+
+后续每个模块都要通过网关来操作沙箱，因此 CLI 必须能够访问网关，而其他任何人都不应能够访问。本模块回答：**客户端如何找到并信任网关？还有谁能够访问它？**
+
+您将通过网关的集群内 Service 列出沙箱，查看 CLI 会拒绝哪些操作，并检查网关既无法从互联网访问，也无法从其他命名空间访问。
+
+.初次接触 OpenShell CLI？
+[%collapsible]
+====
+* *网关端点* — CLI 用于进行 gRPC 通信的 HTTPS URL；此处为网关的 Kubernetes Service。
+* *gRPC* — 一种基于 HTTP/2 的二进制远程过程调用协议。
+* *不安全模式（insecure mode）* — 使用加密的 TLS 但不验证证书；之所以使用该模式，是因为网关证书来自该 Chart 自带的 CA。
+* *NetworkPolicy* — 一种 Kubernetes 规则，用于限制哪些 pod 可以连接到哪些 pod。
+====
+
+== 技术背景
+
+前提条件页面中的设置代码块向 `~/.openshell-lab.env` 写入了两个变量：`OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080`（即该 Service；端点必须包含 `https://`）和 `OPENSHELL_GATEWAY_INSECURE=true`。Web Terminal 运行在集群内，因此可以直接访问该
+Service。命令的路径为：CLI → 网关 Service（TLS）→ 网关 pod → 监管程序 → 沙箱。在模块 1 中，您在安装时没有创建
+Route，并添加了 NetworkPolicy `gateway-ingress`。
+
+== 学习目标
+
+* 通过网关列出沙箱，并读取沙箱阶段。
+* 解释为什么端点必须包含协议方案（scheme），以及为什么要设置不安全模式。
+* 证明网关没有公共端点，并且会拒绝来自其他命名空间的连接。
+
+== 练习 1：通过网关列出沙箱
+
+[source,bash,role="execute",subs="attributes+"]
+----
+source ~/.openshell-lab.env
+echo "$OPENSHELL_GATEWAY_ENDPOINT"
+oc get service {release_name} -n {lab_namespace}
+openshell sandbox list
+----
+
+预期结果: 端点为 `https://{release_name}.{lab_namespace}.svc.cluster.local:8080`，Service
+`{release_name}` 的类型为 `ClusterIP`，端口为 `8080/TCP`，列表显示 `{sandbox_name}` 处于 `Ready` 阶段。CLI 还会打印一行 `WARN … TLS certificate verification is disabled`；这就是您设置的不安全模式。
+
+== 练习 2：查看 CLI 会拒绝什么
+
+NOTE: 下面的两条命令都会失败。这是预期行为：每条命令都展示了 CLI 强制执行的一条规则。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+OPENSHELL_GATEWAY_ENDPOINT=${OPENSHELL_GATEWAY_ENDPOINT#https://} openshell sandbox list; echo "exit=$?"
+OPENSHELL_GATEWAY_INSECURE=false openshell sandbox list; echo "exit=$?"
+----
+
+预期结果: 第一条命令失败，显示 `gateway URL must start with http:// or https://` 和 `exit=1`。第二条命令失败，显示 `failed to read TLS CA from …/mtls/ca.crt` 和 `exit=1`：启用验证后，CLI
+会查找一个从未提供给它的 CA，并且会停止运行，而不是信任该证书。
+
+简而言之：当端点错误或证书无法验证时，CLI 会以关闭方式失败（fail closed）。
+
+== 练习 3：检查还有谁能访问网关
+
+NOTE: 下面的探测预计会连接失败。这正是您想要的结果。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get route -n {lab_namespace}
+oc run gateway-probe -n default --rm -i --restart=Never --quiet --image=registry.access.redhat.com/ubi9/ubi-minimal -- \
+  curl -sk -o /dev/null --max-time 5 -w '%\{http_code}\n' https://{release_name}.{lab_namespace}.svc.cluster.local:8080; echo "exit=$?"
+----
+
+预期结果: `No resources found in {lab_namespace} namespace.`（没有公共 Route），然后 `default`
+命名空间中的探测 pod 打印 `000` 和 `exit=28`（curl 的超时）：NetworkPolicy 丢弃了它到网关的连接，而在练习 1 中，同一个 Service 却响应了您的 Web Terminal。
+
+video::../../modules/_images/m2-gateway-access.mp4[width=800,poster=../../modules/_images/m2-gateway-access-poster.jpg,title="连接 CLI，并从另一个命名空间探测网关（在实验集群上录制）"]
+
+== 证据检查点
+
+* 为什么 Web Terminal 可以访问网关，而 `default` 中的 pod 却不能？
+* 在生产环境中，您会配置什么来代替不安全模式？
+
+.答案
+[%collapsible]
+====
+* NetworkPolicy `gateway-ingress` 只允许来自 `{lab_namespace}` 和 `openshift-terminal` 的连接。
+* 一个 CLI 能够验证的证书（将网关 CA 分发给客户端），从而无需设置 `OPENSHELL_GATEWAY_INSECURE`；并使用网关身份验证（模块 8）来代替匿名访问。
+====
+
+继续进入 xref:05-module-03-agent.adoc[模块 3：使用 Pi 进行 AI 代理编码]。

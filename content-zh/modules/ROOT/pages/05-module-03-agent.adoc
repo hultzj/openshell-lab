@@ -1,0 +1,109 @@
+= 模块 3：使用 Pi 进行 AI 代理编码
+:navtitle: 模块 3：AI 代理编码
+
+在限制代理之前，先看看它能做什么。本模块回答：**这是一个真正的代理，还是一个模拟品？**
+Pi 会向 MaaS LLM 请求代码、写入文件、安装软件包并运行它们，所有这些操作都在沙箱内完成。
+
+您将向 Pi 提供两个提示，运行它构建的内容，并检查它持有的是哪个凭据。
+
+.初次接触代理式编码？
+[%collapsible]
+====
+* *代理* — 一种能将提示转化为操作（写入文件、运行命令）而不仅仅是生成文本的程序。
+* *Pi* — 此处使用的编码代理（版本 {pi_version}），已针对 MaaS 提供程序进行配置。
+* *MaaS* — 红帽模型即服务（Model-as-a-Service），一个与 OpenAI 兼容的 API；本实验使用模型 `{maas_model}`。
+* *解析器令牌* — 沙箱持有的一个占位符，用来代替真实的 API 密钥。
+====
+
+== 技术背景
+
+`openshell sandbox exec {sandbox_name} < /dev/null -- <command>` 通过网关和监管程序在沙箱中运行命令。Pi 会读取 `/sandbox/.pi/agent/models.json`，该文件指定了 MaaS 端点、模型以及密钥 `$MAAS_API_KEY`。Pi 发起的每一个出站调用（发往 MaaS、发往 npm 注册表）都要经过监管程序的网络边界。
+
+IMPORTANT: 本实验中的每条 `openshell sandbox exec` 命令都以 `< /dev/null` 结束其选项部分。CLI 会将您终端的输入转发到沙箱中，因此如果没有它，正在运行的 `exec` 会吞掉粘贴代码块中的后续几行，这些命令就永远不会运行。
+
+== 学习目标
+
+* 在沙箱中以非交互方式运行 Pi，并找到它创建的文件。
+* 在沙箱内运行生成的代码。
+* 证明沙箱中的 `MAAS_API_KEY` 是解析器令牌，而不是密钥。
+
+== 练习 1：让 Pi 编写一个脚本
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi --version
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create a Node.js script that prints Hello from the Zero Trust sandbox"
+----
+
+预期结果: 先显示 `{pi_version}`，然后在几秒钟内，Pi 报告它创建了一个文件（例如
+`/sandbox/hello.js`），并显示输出 `Hello from the Zero Trust sandbox`。
+
+NOTE: 文件名和措辞由 LLM 决定，因此您的输出在细节上会有所不同。如果 Pi 没有返回任何内容，请再次运行同一命令。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'ls /sandbox; for f in /sandbox/*.js; do node "$f"; done'
+----
+
+预期结果: 列表中包含 Pi 报告的 `.js` 文件，运行该文件会打印
+`Hello from the Zero Trust sandbox`。
+
+== 练习 2：让 Pi 编写一个 REST API，然后进行测试
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js REST API listening on port 3000 with GET /health returning {status: ok}, GET /items returning 3 sample items, and POST /items to add an item."
+----
+
+预期结果: Pi 报告生成了一个 `package.json` 和一个服务器文件（在实验运行中为 `server.js`、`index.js`
+或 `app.js`），并且通常还会报告它已安装依赖项、启动了服务器并测试了各个端点。
+
+video::../../modules/_images/m3-pi-agent.mp4[width=800,poster=../../modules/_images/m3-pi-agent-poster.jpg,title="Pi 在沙箱中编写并运行代码（在实验集群上录制）"]
+
+Pi 经常让服务器保持运行，按自己的喜好命名服务器文件，有时还会把项目放在 `/sandbox/express-api`
+之类的子目录中。下面的代码块会找到启动服务器的文件（调用 `.listen(` 的那个文件），停止所有正在运行的
+`node` 进程，在该目录中安装依赖项，启动服务器，并调用每个端点：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+F=$(grep -rlE "\.listen[[:space:]]*\(" /sandbox --include=*.js --include=*.mjs --include=*.cjs --exclude-dir=node_modules | head -1); echo "server: $F"
+cd "$(dirname "$F")" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
+node "$(basename "$F")" & sleep 3
+curl -s localhost:3000/health; echo
+curl -s localhost:3000/items; echo
+curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\"price\":9.99}" localhost:3000/items; echo
+pkill -x node'
+----
+
+预期结果: 显示 ``server: `` 以及 Pi 编写的文件（例如 `/sandbox/server.js`），`npm install` 以软件包数量或
+`up to date` 结束（说明它访问到了 `registry.npmjs.org`），`/health`
+返回 `{"status":"ok"}`，`/items` 返回三个项目，POST 返回带有 `id` 的新项目。具体字段取决于模型生成的内容。
+
+NOTE: `pkill -x node` 会精确匹配进程名称。`pkill -f "node index.js"` 还会匹配运行它的 shell，从而提前结束您的命令。
+
+== 练习 3：检查 Pi 使用的是哪个凭据
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- printenv MAAS_API_KEY
+----
+
+预期结果: 一个以 `openshell:resolve:env:` 开头、以 `_MAAS_API_KEY` 结尾的值，而不是
+`sk-…`。Pi 在只持有这个占位符的情况下成功调用了 MaaS。
+
+简而言之：该代理功能完备，但它从未持有真实密钥。模块 4 到模块 6 将测试它无法做到的事情。
+
+== 证据检查点
+
+* 在本模块中，Pi 的工作依赖于哪两个外部主机？
+* 真实密钥是在哪里附加到 Pi 的请求上的？
+
+.答案
+[%collapsible]
+====
+* 用于代码生成的 `{maas_host}`，以及用于 `npm install` 的 `registry.npmjs.org`。
+* 在沙箱之外的监管程序边界处。模块 6 将证明这个占位符在其他任何地方都毫无用处。
+====
+
+继续进入 xref:06-module-04-network.adoc[模块 4：网络零信任]。

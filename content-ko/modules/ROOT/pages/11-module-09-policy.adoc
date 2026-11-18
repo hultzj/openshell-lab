@@ -1,0 +1,109 @@
+= 모듈 9: 동적 정책
+:navtitle: 모듈 9: 동적 정책
+
+에이전트에게 필요한 것은 변합니다. 새 작업에는 새 패키지 인덱스가 필요할 수 있습니다. 변경할 때마다 샌드박스를
+다시 배포해야 한다면 팀들은 처음부터 광범위한 규칙을 요구할 것입니다. 이 모듈은 다음 질문에 답합니다. *실행 중인
+에이전트에서 하나의 프로그램에 대해 하나의 대상을 허용하고 철회할 수 있는가, 그리고 두 변경이 모두 적용되었음을
+증명할 수 있는가?*
+
+``pypi.org``가 차단되어 있음을 확인하고, ``curl``에만 이를 허용하고, 이를 증명한 다음, 철회합니다.
+
+.OpenShell 정책 버전이 처음이신가요?
+[%collapsible]
+====
+* *정책 버전* — 변경할 때마다 번호가 매겨진 새 버전이 생성되며, 수퍼바이저가 이를 실시간으로 로드합니다.
+* *해시* — 정책 내용의 지문입니다. 내용이 같으면 해시도 같습니다.
+* *`--wait`* — 샌드박스가 새 버전을 로드했다고 보고한 뒤에야 CLI가 반환됩니다.
+====
+
+== 기술적 배경
+
+``openshell policy update``는 샌드박스에 저장된 정책에 엔드포인트를 추가하거나 제거합니다. 게이트웨이는 새 버전을
+수퍼바이저로 보내고, 수퍼바이저는 샌드박스를 다시 시작하지 않고 새 버전으로 교체합니다. ``openshell policy list``는
+변경 이력을 보관합니다.
+
+== 학습 목표
+
+* 적용 중인 정책과 그 버전 이력을 확인합니다.
+* 단일 바이너리에 대한 엔드포인트를 추가하고, 계속 차단되는 바이너리를 포함하여 이를 검증합니다.
+* 파드를 다시 시작하지 않고 엔드포인트를 철회하고 거부가 다시 적용되는지 검증합니다.
+
+== 실습 1: 시작 상태 확인
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org/simple/requests/; echo "exit=$?"'
+openshell policy list {sandbox_name}
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+예상 결과: ``Failed to connect to pypi.org port 443 after 3 ms``와 ``exit=7``이 표시되고, 이력에는 최신
+버전이 ``Loaded``로 표시되며, ``restarts=0``과 파드의 ``uid=…``가 표시됩니다(실습 3을 위해 기록해 두십시오).
+
+TIP: ``openshell policy get {sandbox_name} --full``은 모듈 4의 네트워크 규칙을 포함한 전체 정책을 출력합니다.
+
+== 실습 2: curl에 pypi.org 허용
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --add-endpoint "pypi.org:443:read-write" --binary /usr/bin/curl --wait
+----
+
+예상 결과: 몇 초 안에 `✓ Policy version N submitted`, 그다음 ``✓ Policy version N loaded (active version: N)``이 표시됩니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w "curl -> pypi.org HTTP %\{http_code}\n" --max-time 5 https://pypi.org/simple/requests/
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e 'fetch("https://pypi.org/simple/requests/").then(r=>console.log("node -> pypi.org HTTP",r.status)).catch(e=>console.log("node -> pypi.org ERR",e.cause?e.cause.code:e.message))'
+----
+
+예상 결과: ``curl -> pypi.org HTTP 200``과 ``node -> pypi.org ERR EACCES``가 표시됩니다. 새 규칙은 ``curl``만
+지정하므로 ``node``는 여전히 거부됩니다.
+
+video::../../modules/_images/m9-policy.mp4[width=800,poster=../../modules/_images/m9-policy-poster.jpg,title="실행 중인 샌드박스에서 pypi.org 허용 및 철회(랩 클러스터에서 녹화)"]
+
+== 실습 3: 철회
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --remove-endpoint pypi.org:443 --wait
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org; echo "exit=$?"'
+openshell policy list {sandbox_name} | head -4
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+예상 결과: 새 버전이 ``loaded``로 표시되고, ``Failed to connect to pypi.org``와 ``exit=7``이 표시되며, 최신 버전의 해시가
+변경 전 버전의 해시와 같고(정책 내용이 완전히 동일한 상태로 돌아옴), 여전히 ``restarts=0``이며 ``uid``도 실습 1과
+같습니다. 같은 파드가 한 번도 다시 시작되거나 교체되지 않았습니다.
+
+요약: 하나의 엔드포인트를 하나의 바이너리에 대해 실시간으로 허용하고 철회했으며, 그 이력이 기록되었습니다.
+
+.이 실습의 스크립트 검증
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: sandbox probe did not run (github.com returned '$out')"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://pypi.org >/dev/null 2>&1 && { echo "FAIL: pypi.org still reachable"; exit 1; }
+  [ "$(oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='{.status.containerStatuses[0].restartCount}')" = 0 ] || { echo "FAIL: sandbox restarted"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 증거 확인
+
+* 변경을 적용하기 위해 샌드박스가 다시 시작되지 않았다는 것을 어떻게 알 수 있습니까?
+* 되돌린 후 정책 내용이 이전과 정확히 같다는 것을 어떻게 알 수 있습니까?
+
+.정답
+[%collapsible]
+====
+* 파드의 ``restartCount``가 ``0``으로 유지되었고 ``uid``도 바뀌지 않았으며(교체된 파드는 새 UID를 받습니다), CLI가
+  실행 중인 샌드박스에서 해당 버전이 로드되었다고 보고했습니다.
+* 최신 버전의 해시가 변경 전 버전의 해시와 같습니다.
+====
+
+xref:90-cleanup.adoc[정리]로 진행하십시오.

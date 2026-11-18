@@ -1,0 +1,244 @@
+= 模块 1：从目录部署 OpenShell
+:navtitle: 模块 1：部署 OpenShell
+
+平台团队希望为在集群上部署 AI 代理提供一条受支持的统一路径，而不是让每个团队各自维护一堆 YAML。本模块将 OpenShell 作为一个由 OpenShift Developer Catalog（开发者目录）列出的 Helm Chart 进行安装，并回答这个问题：**一次安装会创建哪些内容，API 密钥又去了哪里？**
+
+您将注册 Chart 仓库，为网关提供访问 Keycloak 所需的信任，安装发行版本，并确认密钥已写入 Vault。
+
+.初次接触 Helm 和 Developer Catalog？
+[%collapsible]
+====
+* *Helm Chart* — 一个 Kubernetes 清单包，作为一个发行版本（release）进行安装和跟踪。
+* *HelmChartRepository* — 一种 OpenShift 资源，可使 Chart 仓库出现在 Developer Catalog 中。
+* *Helm 钩子（hook）* — 在安装过程的固定时间点运行的 Job，例如在主资源之前或之后运行。
+* *ExternalSecret* — External Secrets Operator 读取的一种资源，用于将 Vault 中的值复制到 Kubernetes Secret 中。
+* *OIDC 签发者（issuer）* — Keycloak 域（realm）的 URL，网关接受由其签名的令牌。
+====
+
+== 技术背景
+
+Chart `openshell-ztm-demo` 封装了 NVIDIA 的 OpenShell Helm Chart，并添加了 ZTVP 集成配置。一次
+`helm install` 分三个阶段运行：
+
+[cols="1,3",options="header"]
+|===
+| 阶段 | 运行的内容
+
+| 安装前钩子
+| 一个 CRD 安装程序 Job 创建 Vault 策略和角色 `openshell-admin`（通过在 `vault-0` 中运行 `vault`）、一个允许 `{lab_namespace}` 访问 Vault 的 NetworkPolicy，以及 `sandboxes.agents.x-k8s.io` CRD。随后 Job `vault-seed-maas` 使用该角色（身份验证挂载点 `hub`）登录 Vault，并将您的密钥写入 `secret/hub/infra/openshell/maas`
+| 主资源
+| 网关 StatefulSet 和 Service、策略 ConfigMap、ExternalSecret `maas-api-key-es`、一个 ClusterSPIFFEID，以及一个 Kubernetes Secret `maas-api-key`
+| 安装后钩子
+| Job `keycloak-client-setup` 在 Keycloak 中创建 `openshell-gateway` 客户端；Job `pi-sandbox-setup` 创建沙箱、注册 MaaS 提供程序并应用零信任策略
+|===
+
+网关还会在启动时检查 Keycloak（OIDC 发现）。此集群的路由使用 OpenShift ingress operator 的证书，该证书并非公开受信任，因此您需要通过 ConfigMap 将该 CA 提供给网关。该 Chart 的默认签发者指向另一个集群，因此您还需要将签发者设置为此集群的 Keycloak。
+
+演示网关接受匿名调用方，并将其视为管理员（模块 8 会展示这一点）。该 Chart 原本会通过公共 Route 发布网关；本实验关闭了 Route 并添加了一个 NetworkPolicy，因此只有实验命名空间和 Web Terminal 命名空间能够访问网关。
+
+== 学习目标
+
+* 注册 Helm Chart 仓库，使 Developer Catalog 列出其中的 Chart。
+* 使用与此集群匹配的签发者和 CA 安装 OpenShell 发行版本，并且不创建公共 Route。
+* 使用 NetworkPolicy 限制对网关的网络访问。
+* 识别该发行版本创建的每个 pod 和钩子 Job。
+* 确认 MaaS 密钥已到达 Vault，并且 External Secrets 已将其同步。
+
+== 练习 1：注册 Chart 仓库
+
+安装之前，OpenShell 的任何组件都不存在。先确认这一点，然后注册仓库。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get service {release_name} -n {lab_namespace}
+----
+
+预期结果: 针对命名空间或服务返回 `Error from server (NotFound)`。此时还没有网关，因此 CLI 没有可以通信的对象。
+
+[source,yaml,subs="attributes+"]
+----
+kind: HelmChartRepository
+metadata:
+  name: openshell-ztm-demo            # <1>
+spec:
+  connectionConfig:
+    url: {chart_repo_url}   # <2>
+----
+<1> *Name*（名称）— 控制台用于此仓库的集群范围名称。
+<2> *URL* — 控制台获取 `index.yaml`（Chart 版本列表）的位置。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+cat <<'EOF' | oc apply -f -
+apiVersion: helm.openshift.io/v1beta1
+kind: HelmChartRepository
+metadata:
+  name: openshell-ztm-demo
+spec:
+  name: OpenShell ZTM Demo
+  connectionConfig:
+    url: {chart_repo_url}
+EOF
+helm search repo openshell-ztm-demo/openshell-ztm-demo --version {chart_version}
+----
+
+预期结果: `helmchartrepository.helm.openshift.io/openshell-ztm-demo created`（或 `unchanged`），然后是一行：`openshell-ztm-demo/openshell-ztm-demo  {chart_version}  {openshell_version}`。您安装的 Chart
+版本已固定，因此之后发布的 Chart 版本不会改变您的实验。
+
+NOTE: 在 OpenShift {ocp_version} 上，HelmChartRepository 没有 `status` 字段，因此没有可供检查的 `Ready`
+条件。下面的目录列表和 `helm search` 就是证据。
+
+图形界面视图：打开控制台的
+link:https://console-openshift-console.{cluster_domain}/catalog/ns/{lab_namespace}?catalogType=HelmChart&keyword=openshell[{lab_namespace} 的 Helm Charts 目录^]
+（视角为 *Core platform*（核心平台），导航路径为 *Software Catalog*（软件目录）> *Helm Charts*）。其中列出了
+*Openshell Ztm Demo* 磁贴，并且在 *Chart Repositories*（Chart 仓库）下会出现筛选条件 *OpenShell ZTM Demo (1)*。您也可以从此磁贴进行安装，但练习 3 中的两个 OpenShift 专用设置不在表单中，因此本实验从 CLI 进行安装。
+
+video::../../modules/_images/m1-catalog.mp4[width=800,poster=../../modules/_images/m1-catalog-poster.jpg,title="Helm Charts 目录中的 OpenShell Chart（在实验集群上录制）"]
+
+image::modules::03-catalog-tile.png[按 openshell 筛选的 Helm Charts 目录，显示 Openshell Ztm Demo 磁贴和 OpenShell ZTM Demo Chart 仓库筛选条件]
+
+== 练习 2：准备命名空间和 Keycloak CA
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc create namespace {lab_namespace} --dry-run=client -o yaml | oc apply -f -
+oc get configmap default-ingress-cert -n openshift-config-managed -o jsonpath='{.data.ca-bundle\.crt}' > /tmp/ingress-ca.crt
+oc create configmap keycloak-ingress-ca -n {lab_namespace} --from-file=ca.crt=/tmp/ingress-ca.crt --dry-run=client -o yaml | oc apply -f -
+grep -c 'BEGIN CERTIFICATE' /tmp/ingress-ca.crt
+----
+
+预期结果: 命名空间和 ConfigMap 显示为 `created`（或 `configured`），计数为 `2` 或 `3`。使用 OpenShift
+默认的 ingress 证书时计数为 `2`：通配符路由证书，以及为其签名的 ingress operator CA。RHDP 集群提供公共证书，因此计数为 `3`：通配符证书及其上方的两个中间 CA。无论哪种证书包，网关都可以用来验证 Keycloak 的路由。
+
+现在，仅允许来自实验命名空间（监管程序、沙箱和设置 Job）以及 `openshift-terminal`（您的 Web Terminal
+运行所在的命名空间）的流量访问网关 pod：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+cat <<'EOF' | oc apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: {lab_namespace}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {lab_namespace}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-terminal
+EOF
+----
+
+预期结果: `networkpolicy.networking.k8s.io/gateway-ingress created`（或 `unchanged`）。模块 2 会从另一个命名空间对其进行测试。
+
+简而言之：如果没有这个 CA，网关的 OIDC 发现会在启动时失败，网关 pod 会陷入崩溃循环（crash-loop）。
+
+== 练习 3：安装发行版本
+
+单独运行这一行，并在提示符处输入或粘贴您的 MaaS API 密钥。输入内容不会回显。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+read -rs -p "MaaS API key: " MAAS_API_KEY; echo "key length: ${#MAAS_API_KEY}"
+----
+
+预期结果: ``key length: `` 后跟您的密钥长度（一个非零数字），这样您无需显示密钥即可确认变量已设置。
+
+IMPORTANT: 请单独运行提示行。如果与下一个代码块一起粘贴，`read` 会把粘贴的下一行当作您的密钥。
+
+然后进行安装。最后一行会从您的 shell 中删除密钥。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+helm install {release_name} openshell-ztm-demo/openshell-ztm-demo --version {chart_version} \
+  -n {lab_namespace} \
+  --set maas.apiKey="$MAAS_API_KEY" \
+  --set maas.model={maas_model} \
+  --set vault.enabled=true \
+  --set openshell.server.oidc.issuer=https://keycloak.$DOMAIN/realms/{keycloak_realm} \
+  --set openshell.server.oidc.caConfigMapName=keycloak-ingress-ca \
+  --set openshell.openshiftRoute.enabled=false \
+  --wait --timeout 10m | head -6
+unset MAAS_API_KEY
+----
+
+预期结果: 大约一分钟后，显示 `STATUS: deployed` 和 `REVISION: 1`。
+
+video::../../modules/_images/m1-install.mp4[width=800,poster=../../modules/_images/m1-install-poster.jpg,title="注册 Chart 并安装发行版本（在实验集群上录制）"]
+
+== 练习 4：识别安装所创建的内容
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n {lab_namespace}
+----
+
+预期结果: 五个 pod。网关 `{release_name}-0` 和监管程序 `os-supervisor-…` 处于 `1/1 Running` 状态，沙箱 `default--{sandbox_name}` 处于 `1/1 Running` 状态，`keycloak-client-setup-1-…` 和
+`pi-sandbox-setup-1-…` 处于 `Completed` 状态。
+
+[cols="1,3",options="header"]
+|===
+| Pod | 角色
+
+| `{release_name}-0`
+| 网关（StatefulSet）：CLI 与之通信的 gRPC API
+| `os-supervisor-…`
+| 监管程序：强制执行网络边界，并将解析器令牌替换为真实凭据
+| `default--{sandbox_name}`
+| Pi 代理运行所在的沙箱（`default` 是工作区）
+| `keycloak-client-setup-1-…`
+| 创建 `openshell-gateway` Keycloak 客户端的钩子 Job
+| `pi-sandbox-setup-1-…`
+| 创建沙箱并应用其策略的钩子 Job
+|===
+
+现在确认网关已连接到此集群的 Keycloak，并且密钥已存入 Vault：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc logs -n {lab_namespace} {release_name}-0 | grep -o 'JWKS keys loaded.*'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+----
+
+预期结果: `JWKS keys loaded count=1`（网关通过 TLS 获取了 Keycloak 的签名密钥），并且
+ExternalSecret 显示 `SecretSynced` 和 `True`：External Secrets 已从 Vault 读回该密钥。
+
+.本练习的脚本化断言
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  set -e
+  [ "$(oc get pods -n {lab_namespace} --field-selector=status.phase=Running --no-headers | wc -l)" -ge 3 ] || { echo "FAIL: fewer than 3 running pods"; exit 1; }
+  oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.status.conditions[0].status}' | grep -qx True || { echo "FAIL: ExternalSecret not synced"; exit 1; }
+  oc logs -n {lab_namespace} {release_name}-0 | grep -q 'JWKS keys loaded' || { echo "FAIL: gateway did not load Keycloak keys"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 证据检查点
+
+* 哪个钩子将密钥写入了 Vault？如果它无法登录会发生什么？
+* 为什么网关需要 `keycloak-ingress-ca` ConfigMap？
+* 哪个资源可以证明现在是由 Vault（而不仅仅是 Helm 值）提供密钥？
+
+.答案
+[%collapsible]
+====
+* 安装前 Job `vault-seed-maas`，它使用该 Chart 的安装程序 Job 片刻之前创建的 `openshell-admin` 角色。如果登录失败，它会打印一条警告并以 0 退出，因此安装仍然会成功，但只有 Kubernetes Secret；您可以通过 ExternalSecret 的状态来区分这两种情况。
+* 网关在启动时会获取 Keycloak 的发现文档和签名密钥。Keycloak 的路由使用 ingress operator 的证书，该证书并非由任何公共 CA 签名，因此如果没有该 ConfigMap，TLS 检查会失败，网关随之退出。
+* 状态为 `SecretSynced True` 的 ExternalSecret `maas-api-key-es`。请注意，该 Chart 还会直接根据 Helm 值将密钥写入 Secret `maas-api-key`；External Secrets 会将 Vault 中的副本合并到该 Secret 中。
+====
+
+继续进入 xref:04-module-02-client.adoc[模块 2：连接 OpenShell CLI]。

@@ -1,0 +1,102 @@
+= モジュール 3: Pi による AI エージェントコーディング
+:navtitle: モジュール 3: AI エージェントによるコーディング
+
+エージェントを制限する前に、エージェントに何ができるかを確認しましょう。このモジュールでは、*これは本物のエージェントなのか、それともモックアップなのか?* という問いに答えます。Pi は MaaS の LLM にコードを要求し、ファイルを作成し、パッケージをインストールして実行します。これらはすべてサンドボックス内で行われます。
+
+Pi に 2 つのプロンプトを与え、Pi が作成したものを実行し、Pi がどの認証情報を保持していたかを確認します。
+
+.エージェント型コーディングを初めて使用する場合
+[%collapsible]
+====
+* *エージェント*: プロンプトをテキストだけでなく、アクション（ファイルの作成、コマンドの実行）に変換するプログラム。
+* *Pi*: ここで使用するコーディングエージェント（バージョン {pi_version}）。MaaS プロバイダー向けに構成されています。
+* *MaaS*: Red Hat Model-as-a-Service。OpenAI 互換の API で、このラボではモデル `{maas_model}` を使用します。
+* *リゾルバートークン*: サンドボックスが実際の API キーの代わりに保持するプレースホルダー。
+====
+
+== 技術的な背景
+
+`openshell sandbox exec {sandbox_name} < /dev/null -- <command>` は、ゲートウェイとスーパーバイザーを介してサンドボックス内でコマンドを実行します。Pi は `/sandbox/.pi/agent/models.json` を読み取ります。このファイルには、MaaS エンドポイント、モデル、およびキー `$MAAS_API_KEY` が指定されています。Pi が行うすべての送信呼び出し（MaaS や npm レジストリーへの呼び出し）は、スーパーバイザーのネットワーク境界を通過します。
+
+IMPORTANT: このラボのすべての `openshell sandbox exec` は、オプションの最後に `< /dev/null` を付けています。CLI はターミナルの入力をサンドボックスに転送するため、これがないと、実行中の `exec` が貼り付けたブロックの後続の行を読み込んでしまい、それらのコマンドが実行されません。
+
+== 学習目標
+
+* サンドボックス内で Pi を非対話的に実行し、Pi が作成したファイルを見つける。
+* 生成されたコードをサンドボックス内で実行する。
+* サンドボックスの `MAAS_API_KEY` がキーではなくリゾルバートークンであることを示す。
+
+== 演習 1: Pi にスクリプトを依頼する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi --version
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create a Node.js script that prints Hello from the Zero Trust sandbox"
+----
+
+期待される結果: `{pi_version}` が表示され、数秒以内に Pi が `/sandbox/hello.js` などのファイルを作成したことを報告し、出力 `Hello from the Zero Trust sandbox` を表示します。
+
+NOTE: ファイル名や文言は LLM が決めるため、出力の細部は異なります。Pi が何も返さない場合は、同じコマンドをもう一度実行してください。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'ls /sandbox; for f in /sandbox/*.js; do node "$f"; done'
+----
+
+期待される結果: 一覧に Pi が報告した `.js` ファイルが含まれ、それを実行すると
+`Hello from the Zero Trust sandbox` が出力されます。
+
+== 演習 2: Pi に REST API を依頼してテストする
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js REST API listening on port 3000 with GET /health returning {status: ok}, GET /items returning 3 sample items, and POST /items to add an item."
+----
+
+期待される結果: Pi が `package.json` とサーバーファイル（ラボでの実行では `server.js`、`index.js`、または `app.js`）を作成したことを報告し、通常は依存関係のインストール、サーバーの起動、エンドポイントのテストも行ったことを報告します。
+
+video::../../modules/_images/m3-pi-agent.mp4[width=800,poster=../../modules/_images/m3-pi-agent-poster.jpg,title="Pi がサンドボックス内でコードを作成して実行する（ラボクラスターで録画）"]
+
+Pi はサーバーを実行したままにすることが多く、サーバーファイルに任意の名前を付け、`/sandbox/express-api` などのサブディレクトリーにプロジェクトを配置することもあります。以下のブロックは、サーバーを起動するファイル（`.listen(` を呼び出すファイル）を見つけ、実行中の `node` プロセスを停止し、そのディレクトリーに依存関係をインストールしてサーバーを起動し、各エンドポイントを呼び出します。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+F=$(grep -rlE "\.listen[[:space:]]*\(" /sandbox --include=*.js --include=*.mjs --include=*.cjs --exclude-dir=node_modules | head -1); echo "server: $F"
+cd "$(dirname "$F")" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
+node "$(basename "$F")" & sleep 3
+curl -s localhost:3000/health; echo
+curl -s localhost:3000/items; echo
+curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\"price\":9.99}" localhost:3000/items; echo
+pkill -x node'
+----
+
+期待される結果: ``server: `` と Pi が作成したファイル（例: `/sandbox/server.js`）が表示され、`npm install` はパッケージ数または `up to date` で終了し（`registry.npmjs.org` に到達できたことを示します）、`/health`
+は `{"status":"ok"}` を返し、`/items` は 3 つの項目を返し、POST は `id` 付きの新しい項目を返します。具体的なフィールドは、モデルが生成した内容によって異なります。
+
+NOTE: `pkill -x node` はプロセス名に完全一致します。`pkill -f "node index.js"` では、それを実行しているシェルにも一致してしまい、コマンドが途中で終了します。
+
+== 演習 3: Pi が使用した認証情報を確認する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- printenv MAAS_API_KEY
+----
+
+期待される結果: `sk-…` ではなく、`openshell:resolve:env:` で始まり `_MAAS_API_KEY` で終わる値が表示されます。Pi は、このプレースホルダーだけを保持した状態で MaaS の呼び出しに成功しました。
+
+まとめ: エージェントは十分な能力を持っていますが、実際のキーを保持したことは一度もありません。モジュール 4 から 6 では、エージェントに何ができないかをテストします。
+
+== 証拠のチェックポイント
+
+* このモジュールで、Pi の作業はどの 2 つの外部ホストに依存していましたか?
+* 実際のキーは、Pi のリクエストのどこで付加されましたか?
+
+.解答
+[%collapsible]
+====
+* コード生成用の `{maas_host}` と、`npm install` 用の `registry.npmjs.org` です。
+* サンドボックスの外にある、スーパーバイザーの境界で付加されました。モジュール 6 では、このプレースホルダーがそれ以外の場所では役に立たないことを検証します。
+====
+
+xref:06-module-04-network.adoc[モジュール 4: ネットワークのゼロトラスト] に進んでください。

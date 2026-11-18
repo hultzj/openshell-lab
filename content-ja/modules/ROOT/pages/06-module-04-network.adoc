@@ -1,0 +1,124 @@
+= モジュール 4: ネットワークのゼロトラスト
+:navtitle: モジュール 4: ネットワークのゼロトラスト
+
+任意のホストに到達できるエージェントは、コードをどこにでも送信したり、マルウェアを取得したり、クラウドのメタデータサービスに認証情報を要求したりできます。このモジュールでは、*エージェントは、承認していないホストに到達したり、承認していないプログラムを使用したりできるか?* という問いに答えます。
+
+許可されたホストとリストにないホストを呼び出し、同じホストを呼び出す 2 つのプログラムを比較し、スーパーバイザーが記録する監査イベントを読み取ります。
+
+.プロセスレベルの送信制御を初めて使用する場合
+[%collapsible]
+====
+* *許可リスト*: 許可される宛先のみを列挙したもの。それ以外はすべて拒否されます。
+* *バイナリーバインディング*: ルールで、どのホストかだけでなく、どの実行ファイルがエンドポイントを使用できるかを指定すること。
+* *合成アドレス*: サンドボックスはリストにない名前を `198.18.0.x` に名前解決します。これはスーパーバイザーが拒否するアドレスです。
+* *OCSF*: Open Cybersecurity Schema Framework。スーパーバイザーの監査イベントで使用される構造化形式です。
+====
+
+== 技術的な背景
+
+チャートのポリシーは 3 つの宛先を許可しており、それぞれ指定されたバイナリーのみが使用できます。
+
+[cols="2,1,2",options="header"]
+|===
+| ホスト | ポート | 許可されるバイナリー
+
+| `{maas_host}`
+| 443
+| `curl`、`node`
+| `github.com`、`api.github.com`
+| 443
+| `git`、`curl`
+| `registry.npmjs.org`
+| 443
+| `npm`、`node`
+|===
+
+これは、Pod 単位で判断する Kubernetes の NetworkPolicy ではありません。OpenShell はプロセス単位で判断します。スーパーバイザーは、すべての接続についてホスト *と* 実行ファイルをチェックします。
+
+== 学習目標
+
+* 許可されたホストが応答し、リストにないホストが即座に拒否されることを示す。
+* 同じホストが、あるバイナリーには許可され、別のバイナリーには拒否されることを示す。
+* 拒否された接続について、スーパーバイザーの監査イベントを読み取る。
+
+== 演習 1: 許可されたホストを呼び出す
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+curl -s -o /tmp/models.json -w "MaaS HTTP %\{http_code}\n" --max-time 5 https://{maas_host}/v1/models -H "Authorization: Bearer $MAAS_API_KEY"; head -c 200 /tmp/models.json; echo
+curl -s -o /dev/null -w "github.com HTTP %\{http_code}\n" --max-time 5 https://github.com'
+----
+
+期待される結果: `MaaS HTTP 200` に続いて `"id":"{maas_model}"` を含む JSON のモデル一覧が表示され、その後
+`github.com HTTP 200` が表示されます。サンドボックスはリゾルバートークンしか送信していないにもかかわらず、MaaS は呼び出しを受け入れました。
+
+== 演習 2: リストにないホストを呼び出す
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+for h in https://www.google.com https://example.com https://evil-exfil-server.com/upload http://169.254.169.254/latest/meta-data/; do
+  echo "== $h"; curl -sS --max-time 5 -o /dev/null "$h"; echo "exit=$?"
+done
+getent hosts www.google.com'
+----
+
+期待される結果: AWS のメタデータアドレスを含め、すべての呼び出しが `curl: (7) Failed to connect … after 1 ms`（5 秒のタイムアウトではなく数ミリ秒）と `exit=7` で失敗します。`getent` は、`www.google.com` が `198.18.0.x` の合成アドレスに名前解決されることを示します。
+
+video::../../modules/_images/m4-network.mp4[width=800,poster=../../modules/_images/m4-network-poster.jpg,title="サンドボックスからの送信の許可と拒否（ラボクラスターで録画）"]
+
+== 演習 3: 同じホスト、異なるプログラム
+
+`node` は MaaS に到達できますが、GitHub は `git` と `curl` にのみバインドされています。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e '
+const t = (n, u) => fetch(u).then(r => console.log(n, "HTTP", r.status)).catch(e => console.log(n, "ERR", e.cause ? e.cause.code : e.message));
+t("node -> github.com", "https://github.com");
+t("node -> MaaS", "https://{maas_host}/v1/models");'
+----
+
+期待される結果: `node -> github.com ERR EACCES`（このバイナリーには拒否）と、`node -> MaaS HTTP 401`
+または `HTTP 200`（接続は許可されています。401 は、この呼び出しでキーを送信していないことを意味するだけです）が表示されます。
+
+まとめ: 演習 1 で `curl` は github.com に到達しましたが、`node` は到達できませんでした。ルールは実行ファイル単位で適用されます。
+
+== 演習 4: 監査証跡を読み取る
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell logs {sandbox_name} --since 5m | grep 'DENIED' | tail -4
+----
+
+期待される結果: `NET:OPEN [MED] DENIED /usr/bin/curl(…) -> example.com:443
+[reason:transparent_tcp_policy_denied]` のような `OCSF` の行が表示され、バイナリー、宛先、および理由が示されます。
+
+.この演習のスクリプトによるアサーション
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: allowed host github.com returned '$out'"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://example.com >/dev/null 2>&1 && { echo "FAIL: example.com was reachable"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 証拠のチェックポイント
+
+* 拒否された接続が、タイムアウトではなく約 1 ミリ秒で失敗したのはなぜですか?
+* 侵害されたエージェントがメタデータサービスからクラウドの認証情報を読み取るのを防いでいるのは何ですか?
+
+.解答
+[%collapsible]
+====
+* リストにない名前は合成アドレス `198.18.0.x` に名前解決され、スーパーバイザーがその接続をローカルで拒否するためです。実際のホストに向けては何も送信されません。
+* `169.254.169.254` はどのバイナリーの許可リストにも含まれていないため、その接続は、リストにない他の宛先と同様に拒否されます。
+====
+
+xref:07-module-05-filesystem.adoc[モジュール 5: ファイルシステムのゼロトラスト] に進んでください。

@@ -1,0 +1,101 @@
+= モジュール 9: 動的ポリシー
+:navtitle: モジュール 9: 動的ポリシー
+
+エージェントに必要なものは変化します。新しいタスクには新しいパッケージインデックスが必要になります。変更のたびにサンドボックスを再デプロイしなければならないとしたら、チームは最初から広範なルールを要求するでしょう。このモジュールでは、*実行中のエージェントで、1 つのプログラムに対して 1 つの宛先を許可および取り消しでき、その両方が有効になったことを証明できるか?* という問いに答えます。
+
+`pypi.org` がブロックされていることを確認し、`curl` に対してのみ許可して検証し、その後取り消します。
+
+.OpenShell のポリシーバージョンを初めて使用する場合
+[%collapsible]
+====
+* *ポリシーバージョン*: 変更のたびに番号付きの新しいバージョンが作成されます。スーパーバイザーはそれをライブで読み込みます。
+* *ハッシュ*: ポリシーの内容のフィンガープリント。内容が同一であれば、ハッシュも同一になります。
+* *`--wait`*: サンドボックスが新しいバージョンの読み込みを報告した後にのみ、CLI が制御を返します。
+====
+
+== 技術的な背景
+
+`openshell policy update` は、サンドボックスに保存されたポリシーにエンドポイントを追加または削除します。ゲートウェイは新しいバージョンをスーパーバイザーに送信し、スーパーバイザーはサンドボックスを再起動せずにそれを差し替えます。`openshell policy list`
+は履歴を保持します。
+
+== 学習目標
+
+* 有効なポリシーとそのバージョン履歴を読み取る。
+* 単一のバイナリーに対してエンドポイントを追加し、ブロックされたままのバイナリーも含めて検証する。
+* Pod を再起動せずにエンドポイントを取り消し、拒否が元に戻ることを検証する。
+
+== 演習 1: 開始時の状態を確認する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org/simple/requests/; echo "exit=$?"'
+openshell policy list {sandbox_name}
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+期待される結果: `Failed to connect to pypi.org port 443 after 3 ms` と `exit=7` が表示され、履歴では最新のバージョンが `Loaded` と表示され、`restarts=0` と Pod の `uid=…` が表示されます（演習 3 のために控えておいてください）。
+
+TIP: `openshell policy get {sandbox_name} --full` を実行すると、モジュール 4 のネットワークルールを含むポリシー全体が出力されます。
+
+== 演習 2: curl に対して pypi.org を許可する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --add-endpoint "pypi.org:443:read-write" --binary /usr/bin/curl --wait
+----
+
+期待される結果: 数秒以内に `✓ Policy version N submitted`、続いて `✓ Policy version N loaded (active version: N)` が表示されます。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w "curl -> pypi.org HTTP %\{http_code}\n" --max-time 5 https://pypi.org/simple/requests/
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e 'fetch("https://pypi.org/simple/requests/").then(r=>console.log("node -> pypi.org HTTP",r.status)).catch(e=>console.log("node -> pypi.org ERR",e.cause?e.cause.code:e.message))'
+----
+
+期待される結果: `curl -> pypi.org HTTP 200` と `node -> pypi.org ERR EACCES` が表示されます。新しいルールで指定されているのは `curl`
+だけなので、`node` は引き続き拒否されます。
+
+video::../../modules/_images/m9-policy.mp4[width=800,poster=../../modules/_images/m9-policy-poster.jpg,title="実行中のサンドボックスで pypi.org を許可し、取り消す（ラボクラスターで録画）"]
+
+== 演習 3: 取り消す
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell policy update {sandbox_name} --remove-endpoint pypi.org:443 --wait
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'curl -sS --max-time 5 -o /dev/null https://pypi.org; echo "exit=$?"'
+openshell policy list {sandbox_name} | head -4
+oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='restarts={.status.containerStatuses[0].restartCount} uid={.metadata.uid}{"\n"}'
+----
+
+期待される結果: 新しいバージョンが `loaded` になり、`Failed to connect to pypi.org` と `exit=7` が表示されます。最新のバージョンは、変更前のバージョンと同じハッシュを持ちます（ポリシーが同一の内容に戻ったことを示します）。また、引き続き `restarts=0` で、`uid` は演習 1 と同じです。つまり同じ Pod であり、一度も再起動も置き換えもされていません。
+
+まとめ: 1 つのエンドポイントを 1 つのバイナリーに対してライブで許可および取り消しし、その履歴が記録されました。
+
+.この演習のスクリプトによるアサーション
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: sandbox probe did not run (github.com returned '$out')"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://pypi.org >/dev/null 2>&1 && { echo "FAIL: pypi.org still reachable"; exit 1; }
+  [ "$(oc get pod default--{sandbox_name} -n {lab_namespace} -o jsonpath='{.status.containerStatuses[0].restartCount}')" = 0 ] || { echo "FAIL: sandbox restarted"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 証拠のチェックポイント
+
+* 変更を適用するためにサンドボックスが再起動されなかったことは、どのようにしてわかりますか?
+* 元に戻した後、ポリシーの内容が以前とまったく同じであることは、どのようにして判断できますか?
+
+.解答
+[%collapsible]
+====
+* Pod の `restartCount` は `0` のままで、`uid` も変わっていません（置き換えられた Pod には新しい UID が付与されます）。また、CLI はそのバージョンが実行中のサンドボックスによって読み込まれたと報告しました。
+* 最新バージョンのハッシュが、変更前のバージョンのハッシュと等しくなっています。
+====
+
+xref:90-cleanup.adoc[クリーンアップ] に進んでください。

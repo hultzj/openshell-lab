@@ -1,0 +1,96 @@
+= 技術リファレンス
+:navtitle: 技術リファレンス
+
+== 各プロジェクトが提供するもの
+
+[cols="1,3",options="header"]
+|===
+| プロジェクト | 用途
+
+| link:https://github.com/NVIDIA/OpenShell[NVIDIA OpenShell^] {openshell_version}
+| ゲートウェイ、スーパーバイザー、サンドボックスランタイム、ネットワークおよび Landlock ポリシー、認証情報プロバイダー、CLI
+| link:https://github.com/avijra/openshell-ztm-demo-chart[openshell-ztm-demo chart^] {chart_version}
+| OpenShell チャートをラップし、Vault シード Job、ExternalSecret、ClusterSPIFFEID、Keycloak クライアント Job、Pi サンドボックスを追加します
+| link:https://github.com/validatedpatterns/layered-zero-trust[Zero Trust Validated Pattern^]
+| Vault、External Secrets Operator、Red Hat build of Keycloak、Zero Trust Workload Identity Manager (SPIRE)、ACS、cert-manager、ACM
+| link:https://pi.dev/[Pi^] {pi_version}
+| テスト対象のコーディングエージェント
+| link:https://docs.kernel.org/userspace-api/landlock.html[Landlock^]
+| カーネルによって適用されるファイルシステムの制限
+| link:https://avijra.github.io/openshell-ztm-lab/[OpenShell on Zero Trust demo lab^]
+| この手順書の再構築の元になったオリジナルのラボ
+|===
+
+== 証拠の解釈
+
+[cols="1,2,2",options="header"]
+|===
+| トピック | 裏付けられる解釈 | 必要な証拠
+
+| 送信の許可リスト
+| リストにないホストは、パケットが到達する前に拒否される
+| `curl: (7) … after 1 ms`、`198.18.0.x` への名前解決、OCSF の `DENIED` イベント（モジュール 4）
+| バイナリー単位のルール
+| 同じホストが、ある実行ファイルには許可され、別の実行ファイルには拒否されることがある
+| `curl` が許可されている状態での `node -> github.com ERR EACCES`（モジュール 4 および 9）
+| Landlock
+| ポリシー外への書き込みをブロックしているのは、ファイルパーミッションではなくカーネルである
+| 書き込み可能な `/tmp` と同じモードの `/var/tmp` と `/dev/shm` が拒否される（モジュール 5）
+| 認証情報の分離
+| サンドボックスはキーを保持せず、プレースホルダーは境界を経由した場合にのみ機能する
+| 同じトークンが内部では `HTTP 200`、外部では `HTTP 401`（モジュール 6）
+| Vault と ESO
+| キーは Vault に保管され、External Secrets によって同期される
+| リモートキー `hub/infra/openshell/maas` の ExternalSecret が `SecretSynced True`（モジュール 1 および 7）
+| ゲートウェイの OIDC
+| ゲートウェイは署名、発行者、オーディエンスを検証し、ロールを適用する
+| `Missing required claim: aud`、その後 `demo-engineer` は認証されるが `role 'openshell-user' required`（モジュール 8）
+| ライブポリシー
+| ポリシーの変更はサンドボックスを再起動せずに適用される
+| 新しいバージョンが `loaded`、`restarts=0`（モジュール 9）
+|===
+
+== このラボで証明しないこと
+
+* *ゲートウェイのアクセス制御。* デモチャートは `allowUnauthenticatedUsers: true` を設定しているため、匿名の呼び出し元は管理者になります。このラボでは、ゲートウェイに到達できる相手を制限しています（Route なし、NetworkPolicy あり）。モジュール 8 で示すのはトークンの検証であり、匿名の呼び出し元を拒否するゲートウェイではありません。
+* *SPIFFE ID の使用。* SPIRE は OpenShell のサービスアカウントの ID を登録しますが、SPIFFE CSI ボリュームをマウントしている
+  OpenShell の Pod はなく、チャート独自の ClusterSPIFFEID は SPIRE が無視するクラスを使用しています。
+* *Vault における最小権限。* チャートのインストーラー Job は `vault-0` 内で `vault` を実行し、`{lab_namespace}` 内のすべてのサービスアカウントにバインドされ、`delete` 権限を持つロール `openshell-admin` を作成します。このラボではこれを示しますが（モジュール 7）、修正はしません。シード Job がログインできない場合は、Kubernetes Secret にフォールバックし、それでも成功します。
+* *負荷がかかったときの動作、またはコンテナーエスケープに対する分離。* このラボでは 1 つのサンドボックスを実行し、ポリシーをテストします。コンテナーランタイムはテストしません。
+* *サポートステータス。* OpenShell、デモチャート、および Pi イメージはアップストリームまたはコミュニティーのコンポーネントであり、Red Hat がサポートする製品ではありません。
+
+// NOT-IN-DOCS: the chart issuer/CA overrides, the Keycloak device grant and audience mapper, and the OIDC
+// gateway-registration flow follow the OpenShell chart's values and CLI help (v0.1.6), not Red Hat product docs.
+
+== オリジナルのラボからの変更点
+
+[cols="2,3",options="header"]
+|===
+| オリジナル | この手順書での変更とその理由
+
+| SSH 経由の踏み台サーバー
+| cluster-admin ユーザーとしての OpenShift Web Terminal。このクラスターには踏み台サーバーがありません
+| `helm install … --set maas.apiKey=…` のみ
+| `--version`、`maas.model`、Keycloak の発行者と CA を追加。チャートのデフォルトの発行者は別のクラスターであり、このクラスターの Route は公的に署名されていないためです
+| パブリック Route 上のゲートウェイ
+| クラスター内 Service と NetworkPolicy `gateway-ingress`。デモのゲートウェイは匿名の呼び出し元を管理者にするため、インターネットから到達できてはなりません
+| JSON の処理に `python3`
+| `jq`（Web Terminal には Python がありません）
+| HelmChartRepository の `Ready=True`
+| `helm search` とカタログのタイル（OpenShift {ocp_version} にはステータスがありません）
+| `aud` = `openshell-gateway`
+| 観察結果: Keycloak はデフォルトでは `aud` を設定しません。モジュール 8 でオーディエンスマッパーを追加します
+| Landlock の証明としての `/etc` への書き込み
+| `/var/tmp` と `/tmp` の比較を追加。`/etc` はファイルの所有権によっても保護されているためです
+| `pkill -f "node index.js"`
+| `pkill -x node`。自身のシェルに一致することがありません
+|===
+
+== 出典と参考資料
+
+* モジュール 1: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/building_applications/working-with-helm-charts[OpenShift: Working with Helm charts^]
+* 前提条件: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/web_console/web-terminal[OpenShift: Web terminal^]
+* モジュール 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/zero-trust-workload-identity-manager[Zero Trust Workload Identity Manager^]
+* モジュール 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/external-secrets-operator-for-red-hat-openshift[External Secrets Operator for Red Hat OpenShift^]
+* モジュール 8: link:https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.4/html/server_administration_guide/managing_openid_connect_and_saml_clients[Red Hat build of Keycloak: managing OIDC clients^]
+* link:https://validatedpatterns.io/patterns/layered-zero-trust/[Layered Zero Trust pattern documentation^]

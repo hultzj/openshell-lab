@@ -1,0 +1,56 @@
+= クリーンアップ
+:navtitle: クリーンアップ
+
+== 作成したものを削除する
+
+以下の手順では、OpenShell リリース、その namespace、Keycloak のユーザーとクライアント、およびチャートリポジトリーを削除します。ZTVP と Web Terminal は残ります。
+
+WARNING: namespace を削除すると、サンドボックスや Pi が作成したコードを含め、`{lab_namespace}` 内のすべてが削除されます。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell gateway remove ztm-demo 2>/dev/null
+helm uninstall {release_name} -n {lab_namespace} --wait --timeout 5m
+oc delete namespace {lab_namespace} --wait=true --timeout=180s
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+for path in "users?username=demo-engineer&exact=true" "clients?clientId=openshell-gateway"; do
+  id=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/$path" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id // empty')
+  [ -n "$id" ] && curl -sk -o /dev/null -w "delete ${path%%\?*}: HTTP %\{http_code}\n" -X DELETE "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/${path%%\?*}/$id" -H "Authorization: Bearer $ADMIN_TOKEN"
+done
+oc delete helmchartrepository openshell-ztm-demo --ignore-not-found
+----
+
+期待される結果: `release "{release_name}" uninstalled`、`namespace "{lab_namespace}" deleted`、`delete users: HTTP 204`、`delete clients: HTTP 204`、およびチャートリポジトリーの `deleted` が表示されます。
+
+残っているものを確認します。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get namespace {lab_namespace}
+oc get crd sandboxes.agents.x-k8s.io -o name
+----
+
+期待される結果: `namespaces "{lab_namespace}" not found` が表示され、CRD
+`customresourcedefinition.apiextensions.k8s.io/sandboxes.agents.x-k8s.io` は引き続き一覧に表示されます。チャートはこのクラスタースコープの CRD をインストールしますが、Helm は CRD を削除しません。クラスターの所有者から依頼がない限り、そのままにしておいてください。CRD を削除すると、その種類のすべてのオブジェクトが削除されます。MaaS キーも Vault の `secret/hub/infra/openshell/maas` に残りますが、次回のインストールで上書きされます。
+
+== ラボ環境を削除する（デプロイした担当者のみ）
+
+環境を削除するのは、ブートストラップを実行した担当者のみです。このリポジトリーをチェックアウトしたディレクトリーで、cluster-admin のシェルから、まずティアダウンで削除される対象を確認します。
+
+[source,bash,subs="attributes+"]
+----
+make -C automation status
+oc get namespace {showroom_namespace}
+----
+
+次に、環境を削除し、namespace がなくなったことを確認します。
+
+[source,bash,subs="attributes+"]
+----
+make -C automation teardown
+oc get namespace {showroom_namespace}
+----
+
+削除が完了すると、最後のコマンドは `NotFound` を報告します。ファシリテーター向けの前提条件（Web Terminal Operator、参加者ユーザー、Vault ロール）と ZTVP 自体は残ります。これらを削除するには、xref:modules::92-facilitator-guide.adoc[ファシリテーターガイド（英語）] を参照してください。

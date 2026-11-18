@@ -14,6 +14,8 @@ on a live single-node OpenShift 4.22 cluster and short videos recorded from that
 | `Chart.yaml`, `values.yaml`, `templates/` | The RHDP field-content chart (repo root): one child Application per component |
 | `components/` | `ztvp` (patterns operator, Pattern, in-cluster secret loading), `lab-prereqs` (Web Terminal, participant user, pod limit, RHDP userinfo), `showroom` (the RHDP Showroom chart, vendored with a git-cloner that retries after a node reboot) |
 | `content/` | The Antora guide (AsciiDoc pages, screenshots, videos) |
+| `content-ja/`, `content-ko/`, `content-zh/` | Japanese, Korean and Simplified Chinese translations of the participant pages (AI-assisted; English is authoritative). They reuse the English media, and `scripts/check-translations.sh` fails if a command, Expected result or page drifts from English, so change English first, then each translation |
+| `supplemental-ui/` | One theme override: sets `<html lang>` per language |
 | `automation/` | `make bootstrap`, `make verify`, `make teardown` for clusters without an RHDP order |
 | `cluster/install-config.example.yaml` | The verified single-node install config, with the pull secret and SSH key left as placeholders |
 | `PLAN.md` | Intake decisions, verified versions, and what the live pass found |

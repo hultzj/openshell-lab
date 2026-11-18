@@ -1,0 +1,112 @@
+= モジュール 5: ファイルシステムのゼロトラスト
+:navtitle: モジュール 5: ファイルシステムのゼロトラスト
+
+どこにでも書き込めるエージェントは、バイナリーを仕込んだり、DNS 設定を変更したり、誰も確認しない場所にバックドアを置いたりできます。このモジュールでは、*エージェントは許可したパスの外で読み書きできるか、また、それを阻止しているのは通常のファイルパーミッションではなくカーネルなのか?* という問いに答えます。
+
+ポリシーで許可された場所に書き込み、許可されていないパスを試し、その後 1 つの比較によって Landlock と通常の
+Unix パーミッションを区別します。
+
+.Landlock を初めて使用する場合
+[%collapsible]
+====
+* *Landlock*: プロセスが自身のファイルアクセスを制限できるようにする Linux セキュリティーモジュール（カーネル 5.13 以降）。カーネルによって適用されます。
+* *LSM*: Linux Security Module。SELinux や Landlock が組み込まれるカーネルのフレームワークです。
+* *DAC*: 任意アクセス制御 (discretionary access control)。通常の所有者/グループ/その他のパーミッションビットです。
+* *EACCES*: カーネルが返す "Permission denied" エラー。
+====
+
+== 技術的な背景
+
+ゲートウェイが報告するサンドボックスのポリシー (`openshell policy get {sandbox_name} --full`) は次のとおりです。
+
+[source,yaml]
+----
+filesystem_policy:
+  read_only:  [/bin, /usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+----
+
+それ以外のものはすべてエージェントからは見えません。`best_effort` は、Landlock のないカーネルでもサンドボックスが起動することを意味します。そのため、最後の演習で、このクラスターで Landlock が実際に適用されていることを検証します。
+
+エージェントは、OpenShift によって割り当てられた root 以外の UID で実行されます。これは重要な点です。`/etc` と `/usr` は root が所有しているため、通常のパーミッションでもそこへの一部の書き込みは阻止されます。演習 3 では、通常のパーミッションでは書き込みが *許可される* パスを使用します。
+
+== 学習目標
+
+* 許可されたパスで読み取りと書き込みが成功することを示す。
+* 許可されたパスの外では書き込みと一覧表示が失敗することを示す。
+* 拒否の原因が DAC ではなく Landlock であることを証明する。
+
+== 演習 1: 許可されたパスを使用する
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo "This is allowed" > /sandbox/test.txt && cat /sandbox/test.txt
+echo "Temp file" > /tmp/test.txt && cat /tmp/test.txt
+ls /usr/bin/node; cat /etc/hostname'
+----
+
+期待される結果: `This is allowed`、`Temp file`、`/usr/bin/node`、およびホスト名 `default--{sandbox_name}` が表示されます。
+
+== 演習 2: 拒否されるパスを試す
+
+NOTE: 以下のコマンドはすべて `Permission denied` で失敗します。これは想定どおりです。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo hacked > /etc/test; cp /dev/null /usr/bin/node; touch /etc/shadow
+ls /; mkdir -p /home/sandbox; ls /opt'
+----
+
+期待される結果: `/etc/test: Permission denied`、`cannot create regular file '/usr/bin/node': Permission
+denied`、`cannot touch '/etc/shadow': Permission denied`、`cannot open directory '/': Permission denied`、`cannot create directory '/home/sandbox': Permission denied`、および `cannot open directory '/opt':
+Permission denied` が表示されます。
+
+== 演習 3: Landlock であることを証明する
+
+`/tmp`、`/var/tmp`、`/dev/shm` は同じパーミッションビットを持っています。すべてのユーザーが書き込み可能で、スティッキービットが設定されています。通常のパーミッションでは、これらはまったく同じように扱われます。ポリシーに含まれているのは `/tmp` だけです。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+stat -c "%A %U %n" / /tmp /var/tmp /dev/shm
+for d in /tmp /var/tmp /dev/shm; do echo probe > $d/probe && echo "$d: write OK" || echo "$d: write DENIED"; done'
+----
+
+期待される結果: `/tmp`、`/var/tmp`、`/dev/shm` はすべて `drwxrwxrwt root` と表示され、`/` は
+`dr-xr-xr-x`（誰でも一覧表示可能）と表示されます。続いて `/tmp: write OK`、`/var/tmp: write DENIED`、`/dev/shm: write
+DENIED` が表示されます。パーミッションは同じなのに結果が異なります。違いはカーネルの Landlock ルールセットだけです。演習 2 の `ls /` についても同様で、DAC であれば許可されるはずです。
+
+video::../../modules/_images/m5-landlock.mp4[width=800,poster=../../modules/_images/m5-landlock-poster.jpg,title="許可されるパスと拒否されるパス、および /tmp と /var/tmp の比較（ラボクラスターで録画）"]
+
+まとめ: エージェントから見える書き込み可能なディレクトリーは 2 つだけで、Unix パーミッションでは阻止されない場所でもカーネルがそれを適用します。
+
+.この演習のスクリプトによるアサーション
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /tmp/probe' >/dev/null 2>&1 || { echo "FAIL: /tmp not writable"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /var/tmp/probe' >/dev/null 2>&1 && { echo "FAIL: /var/tmp writable, Landlock not enforcing"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 証拠のチェックポイント
+
+* ここで `/etc/test` の拒否だけでは Landlock の証拠として弱いのはなぜですか?
+* 古いカーネルのクラスターでは、`compatibility: best_effort` は何を意味しますか?
+
+.解答
+[%collapsible]
+====
+* `/etc` は root が所有しており、エージェントの UID は root ではないため、通常のパーミッションでもその書き込みは拒否されるからです。`/var/tmp` と `/dev/shm` の結果、および `ls /` は、Landlock でしか説明できない拒否です。
+* サンドボックスはファイルシステムの制限なしで起動します。新しいクラスターでは、ポリシーに依存する前に演習 3 のチェックを実行してください。
+====
+
+xref:08-module-06-credentials.adoc[モジュール 6: 認証情報のセキュリティー] に進んでください。

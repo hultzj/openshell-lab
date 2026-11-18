@@ -1,0 +1,25 @@
+* xref:index.adoc[소개]
+* xref:01-overview.adoc[아키텍처와 제어 경계]
+* xref:02-details.adoc[사전 요구 사항과 환경]
+
+.배포 및 연결 (11분)
+* xref:03-module-01-deploy.adoc[모듈 1: OpenShell 배포]
+* xref:04-module-02-client.adoc[모듈 2: CLI 연결]
+
+.제어 검증 (21분)
+* xref:05-module-03-agent.adoc[모듈 3: AI 에이전트 코딩]
+* xref:06-module-04-network.adoc[모듈 4: 네트워크 제로 트러스트]
+* xref:07-module-05-filesystem.adoc[모듈 5: 파일 시스템 제로 트러스트]
+* xref:08-module-06-credentials.adoc[모듈 6: 자격 증명 보안]
+
+.플랫폼 통합 (16분)
+* xref:09-module-07-ztvp.adoc[모듈 7: ZTVP 통합]
+* xref:10-module-08-auth.adoc[모듈 8: 사용자 인증]
+* xref:11-module-09-policy.adoc[모듈 9: 동적 정책]
+
+.마무리
+* xref:90-cleanup.adoc[정리]
+* xref:91-reference.adoc[기술 참조]
+
+.진행자용
+* xref:modules::92-facilitator-guide.adoc[진행자 가이드(영어)]
