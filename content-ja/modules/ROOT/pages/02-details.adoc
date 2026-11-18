@@ -1,0 +1,104 @@
+= 前提条件と環境
+:navtitle: 前提条件と環境
+
+== 必要なもの
+
+[cols="1,2",options="header"]
+|===
+| 対象 | 必要なもの
+
+| すべての参加者
+| ブラウザー、OpenShift ユーザー `{lab_user}` とそのパスワード、および Red Hat MaaS API キー (`sk-…`)
+
+| ファシリテーター
+| xref:modules::92-facilitator-guide.adoc[ファシリテーターガイド（英語）] のとおりに準備されたクラスター
+|===
+
+ファシリテーターから提供されるもの:
+
+* OpenShift Web コンソールの URL（下記の「アクセス情報」の表に記載）。
+* `{lab_user}` のパスワード。`{lab_user}` は、この専用クラスターで cluster-admin 権限を持つ OpenShift ユーザーです。
+* モデル `{maas_model}` を使用できる MaaS API キー。
+
+クラスターでは、Zero Trust Validated Pattern（Vault、External Secrets Operator、Keycloak、SPIFFE/SPIRE、Advanced Cluster Security）と OpenShift Web Terminal がすでに稼働しています。これらをデプロイする必要はありません。
+
+IMPORTANT: このラボでは、カスタムリソース定義とクラスタースコープの Helm チャートリポジトリーをインストールし、Keycloak の管理者シークレットを読み取ります。そのため cluster-admin ユーザーを使用します。また、同じ理由で Showroom のページには組み込みのターミナルがありません。Showroom の URL を知っている人なら誰でもそれを使用できてしまうためです。
+
+== Web Terminal を開く
+
+このラボのすべてのコマンドは、OpenShift Web Terminal で実行します。Web Terminal はブラウザー内のシェルで、すでにご自身としてログインした状態になっています。
+
+. コンソールを開きます: link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^]。
+. ログインページで *openshell-lab-htpasswd* をクリックし、`{lab_user}` としてログインします。
+. マストヘッドで、*Command line terminal*（コマンドラインターミナル）アイコン (`>_`) をクリックします。
+. *Initialize terminal*（ターミナルの初期化）で、*Project*（プロジェクト）を `openshift-terminal` のままにして、*Start*（開始）をクリックします。
+
+期待される結果: *OpenShift command line terminal*（OpenShift コマンドラインターミナル）というタイトルのパネルが開き、プロンプト `bash-5.1 ~ $` が表示されます。
+
+video::../../modules/_images/02-web-terminal.mp4[width=800,poster=../../modules/_images/02-web-terminal-poster.jpg,title="lab-admin としてログインし、Web Terminal を起動する（ラボクラスターで録画）"]
+
+image::modules::02-web-terminal.png[Core platform パースペクティブの OpenShift コンソール。下部にコマンドラインターミナルが開いており、oc whoami が lab-admin を出力している]
+
+NOTE: Web Terminal は一定時間操作がないと停止し、ホームディレクトリーは保持されません。ターミナルが再起動した場合は、下記のセットアップブロックを再度実行してください。再実行しても問題ありません。また、このクラスターのコンプライアンス設定により、操作がない状態が 10 分続くとログインが期限切れになります。`oc` が `Unauthorized` を報告した場合は、ターミナルパネルを閉じてマストヘッドから再度開き（必要に応じて先にコンソールページを再読み込みしてください）、セットアップブロックを実行してください。
+
+== ターミナルのセットアップ
+
+このブロックは、OpenShell CLI {openshell_version}（ゲートウェイと同じバージョン）をインストールしてチェックサムを検証し、CLI がゲートウェイのクラスター内 Service を参照するように設定し（Web Terminal はクラスター内で実行されるため）、チャートリポジトリーを Helm に追加します。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+mkdir -p ~/bin && cd /tmp
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-x86_64-unknown-linux-musl.tar.gz
+curl -fsSLO https://github.com/NVIDIA/OpenShell/releases/download/v{openshell_version}/openshell-checksums-sha256.txt
+grep ' openshell-x86_64-unknown-linux-musl.tar.gz$' openshell-checksums-sha256.txt | sha256sum -c - \
+  && tar -xzf openshell-x86_64-unknown-linux-musl.tar.gz -C ~/bin openshell; cd ~
+cat > ~/.openshell-lab.env <<'ENV'
+export PATH=$HOME/bin:$PATH
+export OPENSHELL_GATEWAY_ENDPOINT=https://{release_name}.{lab_namespace}.svc.cluster.local:8080
+export OPENSHELL_GATEWAY_INSECURE=true
+ENV
+grep -q openshell-lab.env ~/.bashrc || echo 'source ~/.openshell-lab.env' >> ~/.bashrc
+source ~/.openshell-lab.env
+helm repo add openshell-ztm-demo {chart_repo_url} --force-update >/dev/null
+openshell --version
+----
+
+期待される結果: `openshell-x86_64-unknown-linux-musl.tar.gz: OK`（ダウンロードしたファイルが公開されているチェックサムと一致）、続いて `openshell {openshell_version}` が表示されます。アーカイブはチェックサムが一致した場合にのみ展開されます。一致しない場合は `FAILED` と表示され、`openshell` バイナリーは作成されません。
+
+== 事前チェックの実行
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc whoami
+oc auth can-i create customresourcedefinitions
+oc auth can-i get secrets -n keycloak-system
+oc get pods -n vault vault-0 --no-headers
+oc get clustersecretstore vault-backend --no-headers
+----
+
+期待される結果: `{lab_user}`、続いて `yes` が 2 回（クラスタースコープに関する CRD の警告は無害です）、`1/1 Running` の `vault-0`、そして `Valid` および `True` の `vault-backend` が表示されます。Vault と ClusterSecretStore
+は、チャートが組み込まれる ZTVP サービスです。いずれかが存在しない場合は、作業を中止してファシリテーターに連絡してください。
+
+== アクセス情報
+
+[cols="1,2",options="header"]
+|===
+| 設定 | 値
+
+| OpenShift コンソール
+| link:https://console-openshift-console.{cluster_domain}/k8s/cluster/projects[console-openshift-console.{cluster_domain}^]
+
+| ラボの namespace
+| `{lab_namespace}`
+
+| Helm リリース
+| `{release_name}`
+
+| サンドボックス
+| `{sandbox_name}`
+
+| MaaS エンドポイントとモデル
+| `https://{maas_host}/v1`、`{maas_model}`
+|===
+
+xref:03-module-01-deploy.adoc[モジュール 1: カタログから OpenShell をデプロイする] に進んでください。

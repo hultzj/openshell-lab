@@ -7,12 +7,15 @@ site:
 content:
   sources:
     - url: .
-      start_path: content
+      # English is the source; content-<lang> are translations (scripts/check-translations.sh keeps them in step).
+      start_paths: [content, content-ja, content-ko, content-zh]
 
 ui:
   bundle:
     url: https://github.com/rhpds/rhdp_showroom_theme/releases/download/v2.0.3/ui-bundle.zip
     snapshot: true
+  # Sets <html lang> from each component's page-lang attribute; the theme hard-codes "en".
+  supplemental_files: ./supplemental-ui
 
 # No antora.extensions: the field-content Showroom builder image has none installed.
 

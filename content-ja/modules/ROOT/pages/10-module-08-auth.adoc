@@ -1,0 +1,158 @@
+= モジュール 8: ユーザー認証
+:navtitle: モジュール 8: ユーザー認証
+
+ここまで、誰もあなたが誰であるかを尋ねていません。すべての CLI 呼び出しは匿名でゲートウェイに到達していました。このモジュールでは、
+*ゲートウェイはユーザー ID を検証するのか、また、何を受け入れるのか?* という問いに答えます。
+
+匿名の呼び出し元に何が与えられるかを確認し、デバイスフローで Keycloak ユーザーとしてサインインし、最初のトークンが拒否される理由を突き止め、クライアントを修正して、サインインしたユーザーに認可が適用されることを確認します。
+
+.OIDC トークンを初めて使用する場合
+[%collapsible]
+====
+* *JWT*: 署名付きの JSON トークン。ゲートウェイは、その署名、発行者、オーディエンス、有効期限をチェックします。
+* *`aud`（オーディエンス）*: トークンの宛先となるサービス。ゲートウェイは `openshell-gateway` を要求します。
+* *`azp`（認可された当事者）*: トークンを要求したクライアント。オーディエンスではありません。
+* *デバイスフロー*: ターミナル向けのサインイン方法。CLI が URL とコードを表示し、ブラウザーで承認します。
+* *プロトコルマッパー*: トークンにクレーム（ここではオーディエンス）を追加する Keycloak のクライアント設定。
+====
+
+== 技術的な背景
+
+ゲートウェイは OIDC が有効な状態（発行者 `https://keycloak.{cluster_domain}/realms/{keycloak_realm}`、オーディエンス `openshell-gateway`）で、かつ `allow_unauthenticated_users = true` で実行されています。後者は、ログインせずにラボを開始できるようにデモチャートが設定しているものです。`--oidc-issuer` を指定して登録された CLI のゲートウェイは、すべての呼び出しでベアラートークンを送信します。ゲートウェイは、Keycloak の鍵に対する署名、発行者、オーディエンス、有効期限をチェックします。
+
+== 学習目標
+
+* 匿名の呼び出し元が受け取る ID とロールを示す。
+* OIDC デバイスフローでゲートウェイにサインインし、検証された ID を読み取る。
+* `aud` クレームのないトークンが拒否される理由を説明し、クライアントを修正する。
+* 認証（あなたが誰であるか）と認可（ロールによって何が許可されるか）を区別する。
+
+== 演習 1: 匿名の呼び出し元には何が与えられるか
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell whoami
+----
+
+期待される結果: `Subject: unauthenticated-local-dev`、`Provider: local_dev`、`Roles: openshell-user,
+openshell-admin` が表示されます。ゲートウェイに到達できる人は誰でも管理者になります。そのため、モジュール 1 ではパブリック Route を削除し、NetworkPolicy を追加しました。本番環境では、匿名アクセスそのものを削除します。
+
+== 演習 2: Keycloak ユーザーを作成し、デバイスフローを有効にする
+
+チャートのクライアントは、ブラウザーのないターミナルに必要なデバイスグラントを許可していません。以下の Keycloak Admin
+REST の呼び出しで、ランダムなパスワードを持つユーザー `demo-engineer` を作成し（以前の `demo-engineer` は置き換えられるため、このブロックは再実行しても問題ありません）、グラントを有効にします。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+kc_admin() {
+  local pw; pw=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+  curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$pw" -d grant_type=password | jq -r .access_token
+}
+ADMIN_TOKEN=$(kc_admin)
+CLIENT_UUID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id')
+OLD_ID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users?username=demo-engineer&exact=true" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id // empty')
+[ -n "$OLD_ID" ] && curl -sk -o /dev/null -X DELETE "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users/$OLD_ID" -H "Authorization: Bearer $ADMIN_TOKEN"
+DEMO_PW=$(openssl rand -hex 8)
+jq -n --arg pw "$DEMO_PW" '{username:"demo-engineer",enabled:true,email:"demo-engineer@example.com",emailVerified:true,firstName:"Demo",lastName:"Engineer",credentials:[{type:"password",value:$pw,temporary:false}]}' \
+  | curl -sk -o /dev/null -w "create user: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users"
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.attributes["oauth2.device.authorization.grant.enabled"] = "true"' \
+  | curl -sk -o /dev/null -w "enable device grant: HTTP %\{http_code}\n" -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID"
+echo "demo-engineer password: $DEMO_PW"
+----
+
+期待される結果: `create user: HTTP 201`、`enable device grant: HTTP 204` が表示され、最後の行には
+``demo-engineer password: `` に続いて 16 文字の 16 進数が表示されます（演習 3 で使用するため控えておいてください。このパスワードはシェルと
+Keycloak にのみ存在し、クリーンアップのページでユーザーは削除されます）。
+
+== 演習 3: サインインし、トークンが拒否されることを確認する
+
+ゲートウェイを OIDC で保護されたものとして登録します。登録するとサインインも行われます。`OPENSHELL_NO_BROWSER=1` を指定すると、CLI はデバイスフローを使用します。これがないと、CLI はターミナル Pod 上でブラウザーのコールバックを待ちますが、ブラウザーはそこに到達できません。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+export OPENSHELL_NO_BROWSER=1
+openshell gateway add "$OPENSHELL_GATEWAY_ENDPOINT" --name ztm-demo \
+  --oidc-issuer "$KEYCLOAK_URL/realms/{keycloak_realm}" \
+  --oidc-client-id openshell-gateway --oidc-audience openshell-gateway --gateway-insecure < /dev/null
+----
+
+CLI は `✓ Gateway 'ztm-demo' added` を出力し、続いて `To authenticate, visit:` と `user_code=…` で終わる URL を出力して待機します。
+
+. ブラウザーの新しいタブで URL を開きます。
+. 演習 2 で出力されたパスワードを使用して、`demo-engineer` としてログインします（スクロールして見えなくなった場合は `echo $DEMO_PW` を実行してください）。
+. *Grant Access to OpenShell Gateway*（OpenShell Gateway へのアクセスを許可）で、*Yes*（はい）をクリックします。
+
+期待される結果: ブラウザーに *Device Login Successful*（デバイスログイン成功）と表示され、ターミナルに `✓ Authenticated via device code` が出力されます。Keycloak がトークンを発行しました。では、それを使用してみます。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+期待される結果: `whoami requires authentication` と `invalid token: Missing required claim: aud` が表示されます。ゲートウェイは
+Keycloak が発行したトークンを拒否しました。
+
+video::../../modules/_images/m8-device-login.mp4[width=800,poster=../../modules/_images/m8-device-login-poster.jpg,title="デバイスフローによるゲートウェイへのサインイン（ラボクラスターで録画）"]
+
+== 演習 4: オーディエンスを追加して再度サインインする
+
+Keycloak は、要求元のクライアントを `aud` ではなく `azp` に設定します。オーディエンスマッパーによって `openshell-gateway` が `aud` に追加されます。その後、再度サインインします。前回と同様にブラウザーで新しいコードを承認します（パスワードの入力は不要な場合があります）。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+ADMIN_TOKEN=$(kc_admin)
+curl -sk -o /dev/null -w "audience mapper: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"openshell-gateway-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.client.audience":"openshell-gateway","access.token.claim":"true","id.token.claim":"false"}}' \
+  "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID/protocol-mappers/models"
+openshell gateway login ztm-demo
+----
+
+期待される結果: `audience mapper: HTTP 201` と新しい `user_code` の URL が表示され、承認後に
+`✓ Authenticated to gateway 'ztm-demo' as demo-engineer` が表示されます。
+
+ゲートウェイが検証した ID を読み取ります。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+期待される結果: `Name: demo-engineer`、`Provider: oidc`、および空の `Roles` が表示されます。ゲートウェイはトークンの署名、発行者、オーディエンスをチェックし、そこから ID を取得しました。
+
+== 演習 5: 認証されていても認可されているとは限らない
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo sandbox list; echo "exit=$?"
+----
+
+期待される結果: `role 'openshell-user' required` と `exit=1` が表示されます。ゲートウェイは `demo-engineer` が誰であるかを把握していますが、そのユーザーは OpenShell のロールを持っていないため拒否されます。一方、匿名の呼び出し元は管理者です。本番環境では、`allowUnauthenticatedUsers: false` を設定し、`rolesClaim`、`userRole`、`adminRole` を使用して Keycloak のロールをマッピングします。
+
+最後に、次のモジュールで再びラボの匿名アクセスを使用できるように、OIDC の登録を削除します。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell gateway remove ztm-demo
+openshell sandbox list
+----
+
+期待される結果: `Gateway registration 'ztm-demo' removed.` が表示され、続いてモジュール 2 と同様に `{sandbox_name}` が `Ready` と表示されます。
+
+IMPORTANT: `ztm-demo` が登録されている間は、`OPENSHELL_GATEWAY_ENDPOINT` 変数を使用した場合でも、CLI はゲートウェイに
+OIDC を適用します。その結果、モジュール 9 は `OIDC credentials are missing` で失敗します。
+
+== 証拠のチェックポイント
+
+* ゲートウェイがチェックしたトークンのクレームのうち、Keycloak がデフォルトで設定しなかったものはどれですか?
+* OIDC が有効なゲートウェイが、このラボでは依然として開放されているのはなぜですか?
+
+.解答
+[%collapsible]
+====
+* `aud` です。Keycloak はクライアントを `azp` に設定しました。ゲートウェイは `aud` に `openshell-gateway` を要求するため、オーディエンスマッパーがそれを追加するまでトークンを拒否しました。
+* `allow_unauthenticated_users = true` により、トークンを持たない呼び出し元には、管理者ロールを持つ `local_dev` の ID が与えられます。OIDC は検証済みの ID をその上に追加するだけであり、匿名の経路を削除するものではありません。
+====
+
+xref:11-module-09-policy.adoc[モジュール 9: 動的ポリシー] に進んでください。

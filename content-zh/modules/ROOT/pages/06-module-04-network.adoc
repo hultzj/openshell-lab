@@ -1,0 +1,125 @@
+= 模块 4：网络零信任
+:navtitle: 模块 4：网络零信任
+
+能够访问任何主机的代理，可以把您的代码发送到任何地方、下载恶意软件，或者向云元数据服务索取凭据。本模块回答：**代理能否访问我们未批准的主机，或者使用我们未批准的程序？**
+
+您将调用允许的主机和未列出的主机，比较两个程序调用同一主机的结果，并读取监管程序记录的审计事件。
+
+.初次接触进程级出站控制？
+[%collapsible]
+====
+* *允许列表* — 唯一被允许的目标；其他一切都会被拒绝。
+* *二进制文件绑定* — 规则不仅指定哪个主机，还指定哪些可执行文件可以使用某个端点。
+* *合成地址* — 沙箱将未列出的名称解析为 `198.18.0.x`，这是一个会被监管程序拒绝的地址。
+* *OCSF* — 开放网络安全架构框架（Open Cybersecurity Schema Framework），即监管程序审计事件所采用的结构化格式。
+====
+
+== 技术背景
+
+该 Chart 的策略允许三个目标，每个目标仅限指定的二进制文件使用：
+
+[cols="2,1,2",options="header"]
+|===
+| 主机 | 端口 | 允许的二进制文件
+
+| `{maas_host}`
+| 443
+| `curl`、`node`
+| `github.com`、`api.github.com`
+| 443
+| `git`、`curl`
+| `registry.npmjs.org`
+| 443
+| `npm`、`node`
+|===
+
+这不是按 pod 进行决策的 Kubernetes NetworkPolicy。OpenShell 按进程进行决策：对于每个连接，监管程序都会同时检查主机**和**可执行文件。
+
+== 学习目标
+
+* 演示允许的主机有响应，而未列出的主机被立即拒绝。
+* 演示同一主机对一个二进制文件允许访问，而对另一个二进制文件拒绝访问。
+* 读取监管程序针对被拒绝连接记录的审计事件。
+
+== 练习 1：调用允许的主机
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+curl -s -o /tmp/models.json -w "MaaS HTTP %\{http_code}\n" --max-time 5 https://{maas_host}/v1/models -H "Authorization: Bearer $MAAS_API_KEY"; head -c 200 /tmp/models.json; echo
+curl -s -o /dev/null -w "github.com HTTP %\{http_code}\n" --max-time 5 https://github.com'
+----
+
+预期结果: 显示 `MaaS HTTP 200`，后跟包含 `"id":"{maas_model}"` 的 JSON 模型列表，然后是
+`github.com HTTP 200`。尽管沙箱只发送了解析器令牌，MaaS 仍然接受了该调用。
+
+== 练习 2：调用未列出的主机
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+for h in https://www.google.com https://example.com https://evil-exfil-server.com/upload http://169.254.169.254/latest/meta-data/; do
+  echo "== $h"; curl -sS --max-time 5 -o /dev/null "$h"; echo "exit=$?"
+done
+getent hosts www.google.com'
+----
+
+预期结果: 每个调用都失败，显示 `curl: (7) Failed to connect … after 1 ms`（只需几毫秒，而不是 5 秒超时）和 `exit=7`，AWS 元数据地址也不例外。`getent` 显示
+`www.google.com` 被解析为一个 `198.18.0.x` 合成地址。
+
+video::../../modules/_images/m4-network.mp4[width=800,poster=../../modules/_images/m4-network-poster.jpg,title="沙箱中被允许和被拒绝的出站流量（在实验集群上录制）"]
+
+== 练习 3：同一主机，不同程序
+
+`node` 可以访问 MaaS，但 GitHub 只绑定到 `git` 和 `curl`。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- node -e '
+const t = (n, u) => fetch(u).then(r => console.log(n, "HTTP", r.status)).catch(e => console.log(n, "ERR", e.cause ? e.cause.code : e.message));
+t("node -> github.com", "https://github.com");
+t("node -> MaaS", "https://{maas_host}/v1/models");'
+----
+
+预期结果: `node -> github.com ERR EACCES`（对此二进制文件拒绝访问），以及 `node -> MaaS HTTP 401`
+或 `HTTP 200`（连接被允许；401 只表示这次调用没有发送密钥）。
+
+简而言之：在练习 1 中 `curl` 访问到了 github.com，而 `node` 却不能。规则是按可执行文件生效的。
+
+== 练习 4：读取审计记录
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell logs {sandbox_name} --since 5m | grep 'DENIED' | tail -4
+----
+
+预期结果: `OCSF` 行，例如 `NET:OPEN [MED] DENIED /usr/bin/curl(…) -> example.com:443
+[reason:transparent_tcp_policy_denied]`，其中指明了二进制文件、目标和原因。
+
+.本练习的脚本化断言
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  out=$(openshell sandbox exec {sandbox_name} < /dev/null -- curl -s -o /dev/null -w '%\{http_code}' --max-time 5 https://github.com 2>/dev/null | tail -1)
+  [ "$out" = 200 ] || { echo "FAIL: allowed host github.com returned '$out'"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- curl -s --max-time 5 -o /dev/null https://example.com >/dev/null 2>&1 && { echo "FAIL: example.com was reachable"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 证据检查点
+
+* 为什么被拒绝的连接在大约一毫秒内就失败了，而不是等待超时？
+* 是什么阻止了被入侵的代理从元数据服务读取云凭据？
+
+.答案
+[%collapsible]
+====
+* 未列出的名称会被解析为合成地址 `198.18.0.x`，监管程序在本地拒绝该连接；不会有任何数据发往真实主机。
+* `169.254.169.254` 不在任何二进制文件的允许列表中，因此该连接会像其他任何未列出的目标一样被拒绝。
+====
+
+继续进入 xref:07-module-05-filesystem.adoc[模块 5：文件系统零信任]。

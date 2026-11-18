@@ -37,6 +37,8 @@ jobs:
           bash automation/tests/web-terminal-install-test.sh
           bash automation/tests/rhdp-defaults-test.sh
           bash automation/tests/verify-headroom-test.sh
+          bash automation/tests/check-translations-test.sh
+          bash automation/tests/check-lab-markup-test.sh
       - if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/field-automation') && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:

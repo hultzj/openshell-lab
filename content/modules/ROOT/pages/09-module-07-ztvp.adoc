@@ -72,9 +72,9 @@ oc exec -n vault vault-0 -- vault read -format=json auth/hub/role/openshell-admi
 oc exec -n vault vault-0 -- vault policy read openshell-admin
 ----
 
-Expected result: `"bound_service_account_names":["*"]` with namespace `{lab_namespace}` and policies `default` and
-`openshell-admin`; the policy grants `create`, `update`, `read`, `list` and `delete` under `secret/data/hub/infra/openshell/*`
-(and `secret/data/openshell/*`). Any service account in the namespace, including the sandbox's, may log in with
+Expected result: `+"bound_service_account_names":["*"]+` with namespace `{lab_namespace}` and policies `default` and
+`openshell-admin`; the policy grants `create`, `update`, `read`, `list` and `delete` under `+secret/data/hub/infra/openshell/*+`
+(and `+secret/data/openshell/*+`). Any service account in the namespace, including the sandbox's, may log in with
 it. The sandbox cannot use it in this lab: a `curl` from the sandbox to `vault.vault.svc` fails with exit code 7, and
 `/var/run/secrets` is outside its Landlock policy,
 but a production install should bind the role to `vault-seed-job` only and drop `delete`.

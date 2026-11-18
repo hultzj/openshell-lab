@@ -1,0 +1,63 @@
+= 정리
+:navtitle: 정리
+
+== 생성한 리소스 제거
+
+다음 단계에서는 OpenShell 릴리스, 해당 네임스페이스, Keycloak 사용자 및 클라이언트, 차트 리포지토리를 제거합니다.
+ZTVP와 Web Terminal은 그대로 유지됩니다.
+
+WARNING: 네임스페이스를 삭제하면 샌드박스와 Pi가 작성한 코드를 포함하여 ``{lab_namespace}``의 모든 것이 제거됩니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell gateway remove ztm-demo 2>/dev/null
+helm uninstall {release_name} -n {lab_namespace} --wait --timeout 5m
+oc delete namespace {lab_namespace} --wait=true --timeout=180s
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+for path in "users?username=demo-engineer&exact=true" "clients?clientId=openshell-gateway"; do
+  id=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/$path" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id // empty')
+  [ -n "$id" ] && curl -sk -o /dev/null -w "delete ${path%%\?*}: HTTP %\{http_code}\n" -X DELETE "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/${path%%\?*}/$id" -H "Authorization: Bearer $ADMIN_TOKEN"
+done
+oc delete helmchartrepository openshell-ztm-demo --ignore-not-found
+----
+
+예상 결과: `release "{release_name}" uninstalled`, `namespace "{lab_namespace}" deleted`,
+`delete users: HTTP 204`, ``delete clients: HTTP 204``가 표시되고, 차트 리포지토리가 ``deleted``로 표시됩니다.
+
+남아 있는 항목을 확인합니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get namespace {lab_namespace}
+oc get crd sandboxes.agents.x-k8s.io -o name
+----
+
+예상 결과: ``namespaces "{lab_namespace}" not found``가 표시되고, CRD
+``customresourcedefinition.apiextensions.k8s.io/sandboxes.agents.x-k8s.io``는 계속 표시됩니다. 차트가 이 클러스터 범위
+CRD를 설치하며, Helm은 CRD를 제거하지 않습니다. 클러스터 소유자가 요청하지 않는 한 그대로 두십시오. CRD를 삭제하면
+해당 종류의 모든 오브젝트가 삭제됩니다. MaaS 키도 Vault의 ``secret/hub/infra/openshell/maas``에 남아 있으며, 다음
+설치 시 덮어쓰게 됩니다.
+
+== 랩 환경 제거(환경을 배포한 사람)
+
+환경은 부트스트랩을 실행한 사람만 제거합니다. 이 리포지토리를 체크아웃한 위치에서 cluster-admin 셸을 사용하여,
+먼저 teardown이 삭제할 항목을 확인합니다.
+
+[source,bash,subs="attributes+"]
+----
+make -C automation status
+oc get namespace {showroom_namespace}
+----
+
+그런 다음 삭제하고 네임스페이스가 사라졌는지 확인합니다.
+
+[source,bash,subs="attributes+"]
+----
+make -C automation teardown
+oc get namespace {showroom_namespace}
+----
+
+삭제가 완료되면 마지막 명령이 ``NotFound``를 보고합니다. 진행자 사전 요구 사항(Web Terminal 오퍼레이터,
+참가자 사용자, Vault 역할)과 ZTVP 자체는 그대로 유지됩니다. 이를 제거하려면 xref:modules::92-facilitator-guide.adoc[진행자 가이드(영어)]를 참조하십시오.

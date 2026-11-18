@@ -1,0 +1,143 @@
+= 模块 7：ZTVP 集成
+:navtitle: 模块 7：ZTVP 集成
+
+只有当应用真正使用安全平台时，安全平台才有价值。本模块回答：**在此集群上，OpenShell 使用了哪些
+ZTVP 服务，又有哪些服务只是处于待命状态？**
+
+您将追踪密钥从 Vault 到网关的路径，找到 SPIRE 颁发的工作负载身份，打开 ACS，并读取该 Chart 注册的
+Keycloak 客户端。
+
+.初次接触 ZTVP 服务？
+[%collapsible]
+====
+* *Vault* — 支持按路径设置策略的加密机密存储。
+* *External Secrets Operator（ESO）* — 按计划将 Vault 中的值复制到 Kubernetes Secret 中。
+* *SPIFFE ID / SVID* — 工作负载的身份 `spiffe://<trust domain>/ns/<namespace>/sa/<service account>`，以及证明该身份的证书。
+* *ClusterSPIFFEID* — 告诉 SPIRE 哪些 pod 获得哪个 ID 的资源。
+* *ACS* — Red Hat Advanced Cluster Security，用于扫描镜像并强制执行部署和运行时策略。
+====
+
+== 技术背景
+
+[cols="1,2,2",options="header"]
+|===
+| 服务 | OpenShell 使用的内容 | 本模块中的证据
+
+| Vault
+| 存储 MaaS 密钥；由该 Chart 的初始化 Job 写入
+| Vault pod；ExternalSecret 路径
+| External Secrets
+| 每小时将密钥同步到 `maas-api-key`
+| ExternalSecret `SecretSynced`
+| SPIFFE/SPIRE
+| 为每个服务账户注册一个身份
+| `{lab_namespace}` 的 SPIRE 条目
+| ACS
+| 扫描并监视集群上的每个 pod，包括沙箱
+| Central 路由和 pod
+| Keycloak
+| 为 `openshell-gateway` 客户端颁发令牌（模块 8）
+| 客户端设置
+|===
+
+== 学习目标
+
+* 追踪密钥从 Vault 经由 External Secrets 到达 Kubernetes Secret 的过程。
+* 读取 SPIRE 为 OpenShell 服务账户颁发的 SPIFFE ID，并说明由谁使用它们。
+* 找到 ACS Central 以及该 Chart 创建的 Keycloak 客户端。
+
+== 练习 1：追踪来自 Vault 的密钥
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n vault -l app.kubernetes.io/name=vault
+oc get externalsecret maas-api-key-es -n {lab_namespace} -o jsonpath='{.spec.data[0].remoteRef.key}{"\n"}'
+oc get clustersecretstore vault-backend -o jsonpath='{.spec.provider.vault.auth.kubernetes.mountPath} {.spec.provider.vault.auth.kubernetes.role}{"\n"}'
+oc get externalsecret maas-api-key-es -n {lab_namespace}
+oc get secret maas-api-key -n {lab_namespace} -o jsonpath='{.data.api_key}' | base64 -d | head -c 3; echo "..."
+----
+
+预期结果: `vault-0  1/1  Running`；远程密钥为 `hub/infra/openshell/maas`；该存储使用角色 `hub-role`
+在挂载点 `hub` 上登录；ExternalSecret 显示 `vault-backend`、`1h`、`SecretSynced`、`True`；并且该 Secret 以 `sk-` 开头。
+
+简而言之：这里涉及两个 Vault 角色：该 Chart 的初始化 Job 使用 `openshell-admin` 写入，ESO 使用 ZTVP 的 `hub-role` 读取。
+
+现在读取该 Chart 为自己创建的角色：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n vault vault-0 -- vault read -format=json auth/hub/role/openshell-admin \
+  | jq -c '.data | {bound_service_account_names, bound_service_account_namespaces, token_policies}'
+oc exec -n vault vault-0 -- vault policy read openshell-admin
+----
+
+预期结果: `+"bound_service_account_names":["*"]+`，命名空间为 `{lab_namespace}`，策略为 `default` 和
+`openshell-admin`；该策略授予对 `+secret/data/hub/infra/openshell/*+`（以及 `+secret/data/openshell/*+`）的
+`create`、`update`、`read`、`list` 和 `delete` 权限。该命名空间中的任何服务账户（包括沙箱的服务账户）都可以使用该角色登录。在本实验中沙箱无法使用它：从沙箱向 `vault.vault.svc` 发起的 `curl` 会以退出码 7 失败，并且 `/var/run/secrets` 不在其 Landlock 策略范围内，但生产环境的安装应当将该角色仅绑定到 `vault-seed-job`，并去掉 `delete` 权限。
+
+== 练习 2：查找工作负载身份
+
+该 Chart 附带一个名为 `openshell-gateway` 的 ClusterSPIFFEID。检查 SPIRE 是否对其进行了处理：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get clusterspiffeid -o custom-columns=NAME:.metadata.name,CLASS:.spec.className,PODS:.status.stats.podsSelected
+----
+
+预期结果: `openshell-gateway` 的类（class）为 `openshift`，并且没有 pod 计数；旁边是 ZTVP 的
+`zero-trust-workload-identity-manager-spire-default`，其类为 `zero-trust-workload-identity-manager-spire`，并带有 pod 计数。SPIRE 会忽略该 Chart 的条目，因为它的类不匹配。
+
+无论如何，ZTVP 的默认条目都会为每个服务账户提供一个身份。查询 SPIRE 服务器：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc exec -n zero-trust-workload-identity-manager spire-server-0 -c spire-server -- \
+  /spire-server entry show -socketPath /tmp/spire-server/private/api.sock | grep -o 'spiffe://.*/ns/{lab_namespace}/.*' | sort -u
+oc get pods -n {lab_namespace} -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.volumes[*].csi.driver}{"\n"}\{end}'
+----
+
+预期结果: 以 `/ns/{lab_namespace}/sa/{release_name}`（网关）、`/sa/{release_name}-sandbox`
+（沙箱）和 `/sa/openshell-setup` 结尾的 ID。第二条命令打印的 pod 名称后面没有 `csi.spiffe.io` 驱动程序。SPIRE 已经注册了这些身份，但没有任何 OpenShell pod 挂载 SPIFFE CSI 卷，因此本实验中目前还没有任何组件使用 SVID 进行身份验证。
+
+video::../../modules/_images/m7-ztvp.mp4[width=800,poster=../../modules/_images/m7-ztvp-poster.jpg,title="追踪密钥经由 Vault 和 External Secrets 的路径，以及 SPIRE 颁发的身份（在实验集群上录制）"]
+
+== 练习 3：打开 ACS Central
+
+[source,bash,role="execute",subs="attributes+"]
+----
+oc get pods -n stackrox -l app=central --no-headers
+oc get route central -n stackrox -o jsonpath='https://{.spec.host}{"\n"}'
+----
+
+预期结果: 一个处于 `1/1 Running` 状态的 `central-…` pod，以及 URL `https://central-stackrox.{cluster_domain}`。
+
+图形界面视图：打开该 URL。登录页面显示 *Select an auth provider*（选择身份验证提供程序），并提供 *OIDC*
+选项：ACS 通过 ZTVP 的 Keycloak 对用户进行身份验证，这与模块 8 中网关所使用的身份提供程序相同。
+
+== 练习 4：读取 Keycloak 客户端
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+ADMIN_PASSWORD=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+ADMIN_TOKEN=$(curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" -d grant_type=password | jq -r .access_token)
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.[] | {clientId, publicClient, directAccessGrantsEnabled, redirectUris}'
+----
+
+预期结果: `"clientId": "openshell-gateway"`、`"publicClient": true`、`"directAccessGrantsEnabled": true`，以及指向网关预期 Route 主机名（本实验中未创建）和 `http://localhost:*/*` 的重定向 URI。
+
+== 证据检查点
+
+* 在本实验中，OpenShell 的运行依赖于哪些 ZTVP 服务？哪些服务仅提供纵深防御？
+* 要让网关使用其 SPIFFE 身份向 Vault 进行身份验证，需要做哪些更改？
+
+.答案
+[%collapsible]
+====
+* Vault 和 External Secrets 负责传递密钥（所用的 Vault 角色权限比该 Job 所需的更宽）；Keycloak 颁发网关的用户令牌（模块 8）。SPIRE
+  身份和 ACS 负责观察和识别工作负载，但请求路径中目前还没有任何环节依赖它们。
+* 网关 pod 需要挂载 SPIFFE CSI 卷，并且 Vault 需要将 SPIRE 作为 JWT 或证书身份验证方法加以信任；该 Chart 还需要一个具有正确类和服务账户的 ClusterSPIFFEID。
+====
+
+继续进入 xref:10-module-08-auth.adoc[模块 8：用户身份验证]。

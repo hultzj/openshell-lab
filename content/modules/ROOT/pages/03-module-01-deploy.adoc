@@ -163,7 +163,7 @@ Run this line on its own and type or paste your MaaS API key at the prompt. It i
 read -rs -p "MaaS API key: " MAAS_API_KEY; echo "key length: ${#MAAS_API_KEY}"
 ----
 
-Expected result: `key length: ` followed by the length of your key (a non-zero number), so you know the
+Expected result: ``key length: `` followed by the length of your key (a non-zero number), so you know the
 variable is set without the key being shown.
 
 IMPORTANT: Keep the prompt line separate. Pasted together with the next block, `read` would take the next

@@ -1,0 +1,120 @@
+= 모듈 3: Pi를 이용한 AI 에이전트 코딩
+:navtitle: 모듈 3: AI 에이전트 코딩
+
+에이전트를 제한하기 전에 에이전트가 무엇을 할 수 있는지 먼저 확인합니다. 이 모듈은 다음 질문에 답합니다. *이것은
+실제 에이전트인가, 아니면 흉내만 낸 것인가?* Pi는 MaaS LLM에 코드를 요청하고, 파일을 작성하고, 패키지를 설치하고
+실행하며, 이 모든 작업을 샌드박스 안에서 수행합니다.
+
+Pi에게 두 가지 프롬프트를 주고, Pi가 만든 결과물을 실행한 다음, Pi가 어떤 자격 증명을 가지고 있었는지 확인합니다.
+
+.에이전트 기반 코딩이 처음이신가요?
+[%collapsible]
+====
+* *에이전트* — 프롬프트를 텍스트뿐 아니라 동작(파일 작성, 명령 실행)으로 바꾸는 프로그램입니다.
+* *Pi* — 여기서 사용하는 코딩 에이전트(버전 {pi_version})로, MaaS 프로바이더용으로 구성되어 있습니다.
+* *MaaS* — Red Hat Model-as-a-Service로, OpenAI 호환 API입니다. 이 랩에서는 모델 ``{maas_model}``을 사용합니다.
+* *리졸버 토큰* — 샌드박스가 실제 API 키 대신 보유하는 자리 표시자입니다.
+====
+
+== 기술적 배경
+
+``openshell sandbox exec {sandbox_name} < /dev/null -- <command>``는 게이트웨이와 수퍼바이저를 통해 샌드박스에서
+명령을 실행합니다. Pi는 ``/sandbox/.pi/agent/models.json``을 읽으며, 이 파일에는 MaaS 엔드포인트, 모델, 그리고
+키 ``$MAAS_API_KEY``가 지정되어 있습니다. Pi가 수행하는 모든 아웃바운드 호출(MaaS, npm 레지스트리)은 수퍼바이저의
+네트워크 경계를 통과합니다.
+
+IMPORTANT: 이 랩의 모든 ``openshell sandbox exec``는 옵션 끝에 ``< /dev/null``을 붙입니다. CLI는 터미널 입력을
+샌드박스로 전달하므로, 이것이 없으면 실행 중인 ``exec``가 붙여 넣은 블록의 다음 줄들을 삼켜 버려 해당 명령이
+실행되지 않습니다.
+
+== 학습 목표
+
+* 샌드박스에서 Pi를 비대화형으로 실행하고 Pi가 생성한 파일을 찾습니다.
+* 생성된 코드를 샌드박스 안에서 실행합니다.
+* 샌드박스의 ``MAAS_API_KEY``가 키가 아니라 리졸버 토큰임을 보여 줍니다.
+
+== 실습 1: Pi에게 스크립트 요청
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi --version
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create a Node.js script that prints Hello from the Zero Trust sandbox"
+----
+
+예상 결과: ``{pi_version}``이 표시된 다음, 몇 초 안에 Pi가 ``/sandbox/hello.js``와 같은 파일을 생성했다고 보고하고
+`Hello from the Zero Trust sandbox` 출력을 보여 줍니다.
+
+NOTE: 파일 이름과 문구는 LLM이 정하므로 세부 출력은 다를 수 있습니다. Pi가 아무것도 반환하지 않으면
+같은 명령을 다시 실행하십시오.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'ls /sandbox; for f in /sandbox/*.js; do node "$f"; done'
+----
+
+예상 결과: 목록에 Pi가 보고한 `.js` 파일이 포함되어 있고, 이를 실행하면
+``Hello from the Zero Trust sandbox``가 출력됩니다.
+
+== 실습 2: Pi에게 REST API를 요청하고 테스트
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- pi -p "Create an Express.js REST API listening on port 3000 with GET /health returning {status: ok}, GET /items returning 3 sample items, and POST /items to add an item."
+----
+
+예상 결과: Pi가 ``package.json``과 서버 파일(랩 실행에서는 `server.js`, `index.js` 또는 `app.js`)을 생성했다고
+보고하며, 대개 종속성을 설치하고, 서버를 시작하고, 엔드포인트를 테스트했다고도 보고합니다.
+
+video::../../modules/_images/m3-pi-agent.mp4[width=800,poster=../../modules/_images/m3-pi-agent-poster.jpg,title="샌드박스에서 코드를 작성하고 실행하는 Pi(랩 클러스터에서 녹화)"]
+
+Pi는 서버를 실행 중인 상태로 두는 경우가 많고, 서버 파일 이름을 임의로 정하며, 때로는 ``/sandbox/express-api``와
+같은 하위 디렉터리에 프로젝트를 둡니다. 아래 블록은 서버를 시작하는 파일(``.listen(``을 호출하는 파일)을 찾고,
+실행 중인 `node` 프로세스를 중지하고, 해당 디렉터리에 종속성을 설치하고, 서버를 시작한 다음, 각 엔드포인트를
+호출합니다.
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+F=$(grep -rlE "\.listen[[:space:]]*\(" /sandbox --include=*.js --include=*.mjs --include=*.cjs --exclude-dir=node_modules | head -1); echo "server: $F"
+cd "$(dirname "$F")" && pkill -x node; npm install --no-audit --no-fund 2>&1 | tail -1
+node "$(basename "$F")" & sleep 3
+curl -s localhost:3000/health; echo
+curl -s localhost:3000/items; echo
+curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"New Item\",\"price\":9.99}" localhost:3000/items; echo
+pkill -x node'
+----
+
+예상 결과: ``server: ``와 Pi가 작성한 파일(예: `/sandbox/server.js`)이 표시되고, ``npm install``은 패키지 수 또는 ``up to date``로 끝나며
+(``registry.npmjs.org``에 접속했다는 뜻), ``/health``는
+``{"status":"ok"}``를, ``/items``는 세 개의 항목을 반환하고, POST는 ``id``가 포함된 새 항목을 반환합니다.
+정확한 필드는 모델이 생성한 내용에 따라 다릅니다.
+
+NOTE: ``pkill -x node``는 프로세스 이름과 정확히 일치하는 프로세스만 찾습니다. ``pkill -f "node index.js"``는
+이를 실행하는 셸까지 일치시켜 명령을 일찍 종료시킵니다.
+
+== 실습 3: Pi가 사용한 자격 증명 확인
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- printenv MAAS_API_KEY
+----
+
+예상 결과: ``sk-…``가 아니라 ``openshell:resolve:env:``로 시작하고 ``_MAAS_API_KEY``로 끝나는 값이 표시됩니다.
+Pi는 이 자리 표시자만 가진 상태로 MaaS를 성공적으로 호출했습니다.
+
+요약: 에이전트는 모든 기능을 갖추고 있지만, 실제 키를 가진 적은 없습니다. 모듈 4~6에서는 에이전트가
+할 수 없는 일을 테스트합니다.
+
+== 증거 확인
+
+* 이 모듈에서 Pi의 작업은 어떤 두 외부 호스트에 의존했습니까?
+* 실제 키는 어디에서 Pi의 요청에 첨부되었습니까?
+
+.정답
+[%collapsible]
+====
+* 코드 생성을 위한 ``{maas_host}``와 ``npm install``을 위한 ``registry.npmjs.org``입니다.
+* 샌드박스 밖에 있는 수퍼바이저의 경계에서 첨부되었습니다. 모듈 6에서는 이 자리 표시자가 다른 곳에서는 쓸모없음을 증명합니다.
+====
+
+xref:06-module-04-network.adoc[모듈 4: 네트워크 제로 트러스트]로 진행하십시오.

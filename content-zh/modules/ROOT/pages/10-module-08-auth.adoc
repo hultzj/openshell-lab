@@ -1,0 +1,159 @@
+= 模块 8：用户身份验证
+:navtitle: 模块 8：用户身份验证
+
+到目前为止，还没有人问过您是谁：每一次 CLI 调用都是以匿名方式到达网关的。本模块回答：
+**网关是否会验证用户身份？它接受什么？**
+
+您将看到匿名调用方获得了什么，使用设备流程以 Keycloak 用户身份登录，找出第一个令牌被拒绝的原因，修复客户端，并观察授权如何作用于已登录的用户。
+
+.初次接触 OIDC 令牌？
+[%collapsible]
+====
+* *JWT* — 一种已签名的 JSON 令牌；网关会检查其签名、签发者、受众和到期时间。
+* *`aud`（受众，audience）* — 令牌的目标服务；网关要求其为 `openshell-gateway`。
+* *`azp`（授权方，authorized party）* — 请求该令牌的客户端；它不是受众。
+* *设备流程（device flow）* — 适用于终端的登录方式：CLI 显示一个 URL 和代码，您在浏览器中进行批准。
+* *协议映射器（protocol mapper）* — 一种 Keycloak 客户端设置，用于向令牌添加声明（此处为受众）。
+====
+
+== 技术背景
+
+网关在启用 OIDC 的情况下运行（签发者为 `https://keycloak.{cluster_domain}/realms/{keycloak_realm}`，受众为 `openshell-gateway`），并且设置了 `allow_unauthenticated_users = true`。演示 Chart 设置了这一项，以便无需登录即可开始实验。使用 `--oidc-issuer` 注册的 CLI 网关会在每次调用时发送一个持有者令牌（bearer token）；网关会根据 Keycloak 的密钥检查签名，并检查签发者、受众和到期时间。
+
+== 学习目标
+
+* 演示匿名调用方获得的身份和角色。
+* 使用 OIDC 设备流程登录网关，并读取经过验证的身份。
+* 解释为什么没有 `aud` 声明的令牌会被拒绝，并修复客户端。
+* 区分身份验证（您是谁）和授权（您的角色允许您做什么）。
+
+== 练习 1：匿名调用方获得了什么？
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell whoami
+----
+
+预期结果: `Subject: unauthenticated-local-dev`、`Provider: local_dev`、`Roles: openshell-user,
+openshell-admin`。任何能够访问网关的人都是管理员，这就是模块 1 删除公共 Route 并添加
+NetworkPolicy 的原因。在生产环境中，您需要彻底移除匿名访问本身。
+
+== 练习 2：创建 Keycloak 用户并启用设备流程
+
+该 Chart 的客户端不允许设备授权（device grant），而没有浏览器的终端需要它。以下 Keycloak 管理 REST
+调用会创建使用随机密码的用户 `demo-engineer`（任何先前存在的 `demo-engineer` 都会被替换，因此可以安全地重复运行此代码块），并启用该授权。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+KEYCLOAK_URL=https://$(oc get route -n keycloak-system -o jsonpath='{.items[0].spec.host}')
+kc_admin() {
+  local pw; pw=$(oc get secret keycloak-admin-user -n keycloak-system -o jsonpath='{.data.password}' | base64 -d)
+  curl -sk "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" -d client_id=admin-cli -d username=admin --data-urlencode "password=$pw" -d grant_type=password | jq -r .access_token
+}
+ADMIN_TOKEN=$(kc_admin)
+CLIENT_UUID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients?clientId=openshell-gateway" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id')
+OLD_ID=$(curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users?username=demo-engineer&exact=true" -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r '.[0].id // empty')
+[ -n "$OLD_ID" ] && curl -sk -o /dev/null -X DELETE "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users/$OLD_ID" -H "Authorization: Bearer $ADMIN_TOKEN"
+DEMO_PW=$(openssl rand -hex 8)
+jq -n --arg pw "$DEMO_PW" '{username:"demo-engineer",enabled:true,email:"demo-engineer@example.com",emailVerified:true,firstName:"Demo",lastName:"Engineer",credentials:[{type:"password",value:$pw,temporary:false}]}' \
+  | curl -sk -o /dev/null -w "create user: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/users"
+curl -sk "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '.attributes["oauth2.device.authorization.grant.enabled"] = "true"' \
+  | curl -sk -o /dev/null -w "enable device grant: HTTP %\{http_code}\n" -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d @- "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID"
+echo "demo-engineer password: $DEMO_PW"
+----
+
+预期结果: `create user: HTTP 201`、`enable device grant: HTTP 204`，最后一行为
+``demo-engineer password: ``，后跟 16 个十六进制字符（请保留该密码以用于练习 3；它只存在于您的 shell
+和 Keycloak 中，清理页面会删除该用户）。
+
+== 练习 3：登录，并看到令牌被拒绝
+
+将网关注册为受 OIDC 保护的网关。注册的同时也会让您登录。`OPENSHELL_NO_BROWSER=1` 使 CLI
+使用设备流程；如果没有设置它，CLI 会在终端 pod 上等待浏览器回调，而您的浏览器无法访问该 pod。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+export OPENSHELL_NO_BROWSER=1
+openshell gateway add "$OPENSHELL_GATEWAY_ENDPOINT" --name ztm-demo \
+  --oidc-issuer "$KEYCLOAK_URL/realms/{keycloak_realm}" \
+  --oidc-client-id openshell-gateway --oidc-audience openshell-gateway --gateway-insecure < /dev/null
+----
+
+CLI 会打印 `✓ Gateway 'ztm-demo' added`，然后打印 `To authenticate, visit:` 以及一个以 `user_code=…` 结尾的 URL，并进入等待状态。
+
+. 在新的浏览器标签页中打开该 URL。
+. 使用练习 2 中打印的密码以 `demo-engineer` 身份登录（如果密码已滚动出屏幕，请运行 `echo $DEMO_PW`）。
+. 在 *Grant Access to OpenShell Gateway*（授予对 OpenShell Gateway 的访问权限）页面上，点击 *Yes*（是）。
+
+预期结果: 浏览器显示 *Device Login Successful*（设备登录成功），终端打印 `✓ Authenticated via device code`。Keycloak 已颁发令牌。现在使用它：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+预期结果: `whoami requires authentication`，并显示 `invalid token: Missing required claim: aud`。网关拒绝了 Keycloak 颁发的令牌。
+
+video::../../modules/_images/m8-device-login.mp4[width=800,poster=../../modules/_images/m8-device-login-poster.jpg,title="通过设备流程登录网关（在实验集群上录制）"]
+
+== 练习 4：添加受众并重新登录
+
+Keycloak 将发起请求的客户端放在 `azp` 中，而不是 `aud` 中。受众映射器会将 `openshell-gateway` 添加到 `aud`。然后重新登录；像之前一样在浏览器中批准新的代码（可能不需要再次输入密码）。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+ADMIN_TOKEN=$(kc_admin)
+curl -sk -o /dev/null -w "audience mapper: HTTP %\{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"openshell-gateway-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.client.audience":"openshell-gateway","access.token.claim":"true","id.token.claim":"false"}}' \
+  "$KEYCLOAK_URL/admin/realms/{keycloak_realm}/clients/$CLIENT_UUID/protocol-mappers/models"
+openshell gateway login ztm-demo
+----
+
+预期结果: `audience mapper: HTTP 201`，一个新的 `user_code` URL，在您批准后显示
+`✓ Authenticated to gateway 'ztm-demo' as demo-engineer`。
+
+读取网关验证过的身份：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo whoami
+----
+
+预期结果: `Name: demo-engineer`、`Provider: oidc`，`Roles` 为空：网关检查了令牌的签名、签发者和受众，并从中获取了身份。
+
+== 练习 5：通过身份验证不等于获得授权
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell -g ztm-demo sandbox list; echo "exit=$?"
+----
+
+预期结果: `role 'openshell-user' required` 和 `exit=1`。网关知道 `demo-engineer` 是谁，而该用户不持有任何 OpenShell 角色，因此请求被拒绝；与此同时，匿名调用方却是管理员。在生产环境中，您需要设置 `allowUnauthenticatedUsers: false`，并通过 `rolesClaim`、`userRole` 和 `adminRole` 映射 Keycloak 角色。
+
+最后，删除 OIDC 注册，以便下一个模块再次使用实验的匿名访问：
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell gateway remove ztm-demo
+openshell sandbox list
+----
+
+预期结果: `Gateway registration 'ztm-demo' removed.`，然后像模块 2 中一样显示 `{sandbox_name}` `Ready`。
+
+IMPORTANT: 只要 `ztm-demo` 处于已注册状态，即使您使用 `OPENSHELL_GATEWAY_ENDPOINT` 变量，CLI
+也会对网关应用 OIDC，模块 9 会因 `OIDC credentials are missing` 而失败。
+
+== 证据检查点
+
+* 网关检查了哪个 Keycloak 默认不会设置的令牌声明？
+* 为什么在本实验中，启用了 OIDC 的网关仍然是开放的？
+
+.答案
+[%collapsible]
+====
+* `aud`。Keycloak 在 `azp` 中指明了客户端；网关要求 `aud` 中包含 `openshell-gateway`，因此在受众映射器添加它之前，网关一直拒绝该令牌。
+* `allow_unauthenticated_users = true` 会为没有令牌的调用方提供具有管理员角色的 `local_dev` 身份。OIDC 只是在此基础上增加了经过验证的身份；它并没有移除匿名访问路径。
+====
+
+继续进入 xref:11-module-09-policy.adoc[模块 9：动态策略]。

@@ -1,0 +1,102 @@
+= 기술 참조
+:navtitle: 기술 참조
+
+== 각 프로젝트의 역할
+
+[cols="1,3",options="header"]
+|===
+| 프로젝트 | 용도
+
+| link:https://github.com/NVIDIA/OpenShell[NVIDIA OpenShell^] {openshell_version}
+| 게이트웨이, 수퍼바이저, 샌드박스 런타임, 네트워크 및 Landlock 정책, 자격 증명 프로바이더, CLI
+| link:https://github.com/avijra/openshell-ztm-demo-chart[openshell-ztm-demo chart^] {chart_version}
+| OpenShell 차트를 감싸고, Vault 시드 Job, ExternalSecret, ClusterSPIFFEID, Keycloak 클라이언트 Job, Pi 샌드박스를 추가합니다
+| link:https://github.com/validatedpatterns/layered-zero-trust[Zero Trust Validated Pattern^]
+| Vault, External Secrets Operator, Red Hat build of Keycloak, Zero Trust Workload Identity Manager(SPIRE), ACS, cert-manager, ACM
+| link:https://pi.dev/[Pi^] {pi_version}
+| 테스트 대상 코딩 에이전트
+| link:https://docs.kernel.org/userspace-api/landlock.html[Landlock^]
+| 커널이 강제 적용하는 파일 시스템 제한
+| link:https://avijra.github.io/openshell-ztm-lab/[OpenShell on Zero Trust demo lab^]
+| 이 가이드의 바탕이 된 원본 랩
+|===
+
+== 증거 해석
+
+[cols="1,2,2",options="header"]
+|===
+| 주제 | 뒷받침되는 해석 | 필요한 증거
+
+| Egress 허용 목록
+| 목록에 없는 호스트는 패킷이 도달하기 전에 거부됨
+| `curl: (7) … after 1 ms`, `198.18.0.x` 해석, OCSF `DENIED` 이벤트(모듈 4)
+| 바이너리별 규칙
+| 같은 호스트가 한 실행 파일에는 허용되고 다른 실행 파일에는 거부될 수 있음
+| ``curl``은 허용되는 상태에서 `node -> github.com ERR EACCES`(모듈 4 및 9)
+| Landlock
+| 파일 권한이 아니라 커널이 정책 밖의 쓰기를 차단함
+| 쓰기 가능한 ``/tmp``와 같은 모드인 ``/var/tmp``와 ``/dev/shm``이 거부됨(모듈 5)
+| 자격 증명 격리
+| 샌드박스는 키를 보유하지 않으며, 자리 표시자는 경계를 통해서만 동작함
+| 같은 토큰이 내부에서는 `HTTP 200`, 외부에서는 `HTTP 401`(모듈 6)
+| Vault 및 ESO
+| 키는 Vault에 저장되고 External Secrets가 다시 동기화함
+| 원격 키 ``hub/infra/openshell/maas``를 사용하는 ExternalSecret `SecretSynced True`(모듈 1 및 7)
+| 게이트웨이 OIDC
+| 게이트웨이가 서명, 발급자, audience를 검증하고 역할을 적용함
+| `Missing required claim: aud`, 이후 ``demo-engineer``는 인증되었으나 `role 'openshell-user' required`(모듈 8)
+| 실시간 정책
+| 정책 변경이 샌드박스를 다시 시작하지 않고 적용됨
+| 새 버전 `loaded`, `restarts=0`(모듈 9)
+|===
+
+== 이 랩이 증명하지 않는 것
+
+* *게이트웨이 접근 제어.* 데모 차트는 ``allowUnauthenticatedUsers: true``로 설정하므로 익명 호출자가
+  관리자입니다. 랩은 게이트웨이에 접속할 수 있는 대상을 제한하며(Route 없음, NetworkPolicy), 모듈 8은 토큰
+  검증을 보여 줄 뿐 익명 호출자를 거부하는 게이트웨이를 보여 주지는 않습니다.
+* *SPIFFE ID의 사용.* SPIRE는 OpenShell의 서비스 계정에 대한 ID를 등록하지만, SPIFFE CSI 볼륨을 마운트하는
+  OpenShell 파드는 없으며, 차트 자체의 ClusterSPIFFEID는 SPIRE가 무시하는 클래스를 사용합니다.
+* *Vault의 최소 권한.* 차트의 설치 Job은 `vault-0` 안에서 ``vault``를 실행하고, ``{lab_namespace}``의 모든 서비스 계정에
+  바인딩되고 `delete` 권한을 가진 역할 ``openshell-admin``을 생성합니다. 랩은 이를 보여 줄 뿐(모듈 7) 수정하지는
+  않습니다. 시드 Job이 로그인하지 못하면 Kubernetes 시크릿으로 대체하며 여전히 성공합니다.
+* *부하 상황에서의 동작 또는 컨테이너 탈출에 대한 격리.* 랩은 하나의 샌드박스를 실행하며, 컨테이너 런타임이 아니라
+  정책을 테스트합니다.
+* *지원 상태.* OpenShell, 데모 차트, Pi 이미지는 업스트림 또는 커뮤니티 구성 요소이며 Red Hat이 지원하는
+  제품이 아닙니다.
+
+// NOT-IN-DOCS: the chart issuer/CA overrides, the Keycloak device grant and audience mapper, and the OIDC
+// gateway-registration flow follow the OpenShell chart's values and CLI help (v0.1.6), not Red Hat product docs.
+
+== 원본 랩에서 변경된 사항
+
+[cols="2,3",options="header"]
+|===
+| 원본 | 이 가이드의 방식과 이유
+
+| SSH를 통한 배스천 호스트
+| cluster-admin 사용자로 OpenShift Web Terminal 사용. 이 클러스터에는 배스천 호스트가 없음
+| ``helm install … --set maas.apiKey=…``만 사용
+| `--version`, `maas.model`, Keycloak 발급자 및 CA를 추가함. 차트의 기본 발급자는 다른 클러스터이며, 이 클러스터의 Route는 공개적으로 서명되지 않았기 때문
+| 공개 Route의 게이트웨이
+| 클러스터 내부 Service와 NetworkPolicy `gateway-ingress`. 데모 게이트웨이는 익명 호출자를 관리자로 취급하므로 인터넷에서 접근할 수 없어야 함
+| JSON 처리에 `python3` 사용
+| `jq` 사용(Web Terminal에는 Python이 없음)
+| HelmChartRepository `Ready=True`
+| ``helm search``와 카탈로그 타일(OpenShift {ocp_version}에는 status가 없음)
+| `aud` = `openshell-gateway`
+| 관찰 결과: Keycloak은 기본적으로 ``aud``를 설정하지 않음. 모듈 8에서 audience 매퍼를 추가함
+| Landlock의 증거로 ``/etc``에 쓰기
+| ``/etc``는 파일 소유권으로도 보호되므로 `/var/tmp` 대 `/tmp` 비교를 추가함
+| `pkill -f "node index.js"`
+| 자신의 셸과 일치할 수 없는 `pkill -x node`
+|===
+
+== 출처 및 추가 자료
+
+* 모듈 1: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/building_applications/working-with-helm-charts[OpenShift: Working with Helm charts^]
+* 사전 요구 사항: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/web_console/web-terminal[OpenShift: Web terminal^]
+* 모듈 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/zero-trust-workload-identity-manager[Zero Trust Workload Identity Manager^]
+* 모듈 7: link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/external-secrets-operator-for-red-hat-openshift[External Secrets Operator for Red Hat OpenShift^]
+* 모듈 8: link:https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.4/html/server_administration_guide/managing_openid_connect_and_saml_clients[Red Hat build of Keycloak: managing OIDC clients^]
+* link:https://validatedpatterns.io/patterns/layered-zero-trust/[Layered Zero Trust pattern documentation^]

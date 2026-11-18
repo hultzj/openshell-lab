@@ -102,6 +102,29 @@ for page in "$pages"/*.adoc; do
   ' "$page" >&2 || failed=1
 done
 
+# Inline markup Asciidoctor did not recognise reaches readers as literal ` or *text*. Common when a Japanese,
+# Korean or Chinese character touches the span, or a span ends in a space: write ``text`` or **text** there.
+# Prints each hit and succeeds if any HTML file under $1 has one, outside pre, code and script elements.
+literal_markup() {
+  local hits  # judged by output, not exit status: find -exec + may split the files into several perl runs
+  hits=$(find "$1" -name '*.html' -exec perl -CSD -0777 -ne '
+    s#<pre.*?</pre>##gs; s#<code>.*?</code>##gs; s#<script.*?</script>##gs; s#<[^>]+>##g;
+    print "$ARGV: $1\n" while /([^\n]{0,30}(?:`|\*\S[^*\n]{0,40}\*)[^\n]{0,20})/g' {} +)
+  [[ -n $hits ]] && printf '%s\n' "$hits"
+}
+
+# Japanese and Chinese put no spaces between words, so a source line break between two of their characters
+# shows as a stray space. Prints each hit in the article text of HTML under $1; succeeds if there is one.
+cjk_gaps() {
+  local hits
+  hits=$(find "$1" -name '*.html' -exec perl -CSD -0777 -ne '
+    my ($a) = /<article class="doc">(.*?)<\/article>/s or next;
+    $a =~ s#<pre.*?</pre>##gs; $a =~ s#<[^>]+>#\x{1}#g;
+    my $c = "[\x{3000}-\x{30FF}\x{3400}-\x{9FFF}\x{FF00}-\x{FFEF}]";
+    print "$ARGV: $1\n" while $a =~ /(.{0,12}$c[ \t\n]+$c.{0,12})/g' {} +)
+  [[ -n $hits ]] && printf '%s\n' "$hits"
+}
+
 # A defined attribute still shown as {name} in the HTML was never substituted:
 # its block lacks subs="attributes+" (Asciidoctor does not warn about that).
 if [[ ! -d www ]]; then
@@ -116,11 +139,22 @@ else
   if grep -rnoF '\{' www --include='*.html' >&2; then
     fail "a backslash before a brace survived into the HTML; escape only {word} forms"
   fi
+  if literal_markup www >&2; then
+    fail "inline markup rendered literally (see above)"
+  fi
+  if cjk_gaps www/ja >&2 || cjk_gaps www/zh >&2; then
+    fail "a line break between Japanese or Chinese characters renders as a space; join those source lines"
+  fi
+  # supplemental-ui sets <html lang> from each component's page-lang, so screen readers pick the right voice.
+  for pair in modules:en ja:ja ko:ko zh:zh-CN; do
+    grep -q "<html lang=\"${pair#*:}\"" "www/${pair%%:*}/index.html" 2>/dev/null ||
+      fail "www/${pair%%:*}/index.html lacks <html lang=\"${pair#*:}\""
+  done
 fi
 
 # Screenshots are live-captured evidence; each needs alt text for screen readers: the first
 # positional attribute, or alt=, and not blank.
-for page in "$pages"/*.adoc; do
+for page in content*/modules/ROOT/pages/*.adoc; do
   awk -v f="$page" '
     /^image::[^[]+\[/ {
       inner = $0; sub(/^image::[^[]*\[/, "", inner); sub(/\][^]]*$/, "", inner)
@@ -135,13 +169,16 @@ for page in "$pages"/*.adoc; do
 done
 
 # The field-content Showroom builder (quay.io/rhpds/antora) has no mermaid extension.
-if grep -n '^\[mermaid' "$pages"/*.adoc >&2; then
+if grep -n '^\[mermaid' content*/modules/ROOT/pages/*.adoc >&2; then
   fail "[mermaid] blocks do not render in Showroom; use a table or numbered list"
 fi
 
 if ! $draft && grep -n '^// UNVERIFIED' "$pages"/*.adoc >&2; then
   fail "steps not yet verified on a live cluster (// UNVERIFIED)"
 fi
+
+# Translations must keep the verified commands, Expected results and media of the English guide.
+bash scripts/check-translations.sh || failed=1
 
 [[ $failed -eq 0 ]] && echo "check-lab: OK$($draft && echo ' (draft)')"
 exit "$failed"

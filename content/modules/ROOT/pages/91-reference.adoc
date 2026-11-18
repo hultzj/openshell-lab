@@ -84,7 +84,7 @@
 | `jq` (the Web Terminal has no Python)
 | HelmChartRepository `Ready=True`
 | `helm search` and the catalog tile (no status on OpenShift {ocp_version})
-| "`aud` = openshell-gateway"
+| `aud` = `openshell-gateway`
 | Observed: Keycloak sets no `aud` by default; Module 8 adds the audience mapper
 | Writes to `/etc` as proof of Landlock
 | Adds the `/var/tmp` vs `/tmp` comparison, since `/etc` is also protected by file ownership

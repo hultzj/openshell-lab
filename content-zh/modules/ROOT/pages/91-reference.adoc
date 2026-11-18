@@ -1,0 +1,97 @@
+= 技术参考
+:navtitle: 技术参考
+
+== 各项目的作用
+
+[cols="1,3",options="header"]
+|===
+| 项目 | 用途
+
+| link:https://github.com/NVIDIA/OpenShell[NVIDIA OpenShell^] {openshell_version}
+| 网关、监管程序、沙箱运行时、网络策略和 Landlock 策略、凭据提供程序、CLI
+| link:https://github.com/avijra/openshell-ztm-demo-chart[openshell-ztm-demo Chart^] {chart_version}
+| 封装 OpenShell Chart；添加 Vault 初始化 Job、ExternalSecret、ClusterSPIFFEID、Keycloak 客户端 Job 以及 Pi 沙箱
+| link:https://github.com/validatedpatterns/layered-zero-trust[零信任验证模式（Zero Trust Validated Pattern）^]
+| Vault、External Secrets Operator、Red Hat build of Keycloak、Zero Trust Workload Identity Manager（SPIRE）、ACS、cert-manager、ACM
+| link:https://pi.dev/[Pi^] {pi_version}
+| 被测试的编码代理
+| link:https://docs.kernel.org/userspace-api/landlock.html[Landlock^]
+| 由内核强制执行的文件系统限制
+| link:https://avijra.github.io/openshell-ztm-lab/[OpenShell on Zero Trust 演示实验^]
+| 本指南据以重建的原始实验
+|===
+
+== 证据解读
+
+[cols="1,2,2",options="header"]
+|===
+| 主题 | 可支持的解读 | 所需证据
+
+| 出站允许列表
+| 未列出的主机在任何数据包到达之前就被拒绝
+| `curl: (7) … after 1 ms`、`198.18.0.x` 解析结果、OCSF `DENIED` 事件（模块 4）
+| 按二进制文件的规则
+| 同一主机可以对一个可执行文件允许访问，而对另一个拒绝访问
+| 在允许 `curl` 的同时出现 `node -> github.com ERR EACCES`（模块 4 和模块 9）
+| Landlock
+| 阻止在策略之外写入的是内核，而不是文件权限
+| `/var/tmp` 和 `/dev/shm` 与可写的 `/tmp` 权限模式相同，却被拒绝写入（模块 5）
+| 凭据隔离
+| 沙箱从不持有密钥；占位符只能通过边界使用
+| 同一令牌在内部得到 `HTTP 200`，在外部得到 `HTTP 401`（模块 6）
+| Vault 和 ESO
+| 密钥存储在 Vault 中，并由 External Secrets 同步回来
+| ExternalSecret 显示 `SecretSynced True`，远程密钥为 `hub/infra/openshell/maas`（模块 1 和模块 7）
+| 网关 OIDC
+| 网关会验证签名、签发者和受众，并应用角色
+| 先出现 `Missing required claim: aud`，然后 `demo-engineer` 通过身份验证，但显示 `role 'openshell-user' required`（模块 8）
+| 实时策略
+| 策略更改无需重启沙箱即可生效
+| 新版本显示 `loaded`，`restarts=0`（模块 9）
+|===
+
+== 本实验不能证明的内容
+
+* **网关访问控制。**演示 Chart 设置了 `allowUnauthenticatedUsers: true`，因此匿名调用方是管理员。本实验限制了谁能访问网关（没有 Route，并有一个 NetworkPolicy）；模块 8 展示的是令牌验证，而不是一个会拒绝匿名调用方的网关。
+* **SPIFFE 身份的使用。**SPIRE 为 OpenShell 的服务账户注册了身份，但没有任何 OpenShell pod 挂载
+  SPIFFE CSI 卷，而且该 Chart 自带的 ClusterSPIFFEID 使用的是 SPIRE 会忽略的类。
+* **Vault 中的最小权限。**该 Chart 的安装程序 Job 在 `vault-0` 中运行 `vault`，并创建绑定到
+  `{lab_namespace}` 中所有服务账户、且具有 `delete` 权限的角色 `openshell-admin`。本实验展示了这一点（模块 7），但没有修复它。如果初始化 Job 无法登录，它会回退为使用 Kubernetes Secret，并且仍然会成功。
+* **负载下的表现，或针对容器逃逸的隔离。**本实验运行一个沙箱并测试策略，而不测试容器运行时。
+* **支持状态。**OpenShell、演示 Chart 和 Pi 镜像均为上游或社区组件，而不是红帽支持的产品。
+
+// NOT-IN-DOCS: the chart issuer/CA overrides, the Keycloak device grant and audience mapper, and the OIDC
+// gateway-registration flow follow the OpenShell chart's values and CLI help (v0.1.6), not Red Hat product docs.
+
+== 与原始实验相比的变化
+
+[cols="2,3",options="header"]
+|===
+| 原始实验 | 本指南的做法及原因
+
+| 通过 SSH 使用堡垒机
+| 以 cluster-admin 用户身份使用 OpenShift Web Terminal；此集群上没有堡垒机
+| 仅使用 `helm install … --set maas.apiKey=…`
+| 添加了 `--version`、`maas.model`、Keycloak 签发者和 CA：该 Chart 的默认签发者是另一个集群，而且此集群的路由并非由公共机构签名
+| 网关位于公共 Route 上
+| 集群内 Service 加上 NetworkPolicy `gateway-ingress`：演示网关会将匿名调用方视为管理员，因此绝不能从互联网访问它
+| 使用 `python3` 处理 JSON
+| 使用 `jq`（Web Terminal 中没有 Python）
+| HelmChartRepository `Ready=True`
+| `helm search` 和目录磁贴（在 OpenShift {ocp_version} 上没有状态字段）
+| “`aud` = openshell-gateway”
+| 实际观察：Keycloak 默认不设置 `aud`；模块 8 添加了受众映射器
+| 以写入 `/etc` 作为 Landlock 的证明
+| 添加了 `/var/tmp` 与 `/tmp` 的对比，因为 `/etc` 同时受到文件所有权的保护
+| `pkill -f "node index.js"`
+| `pkill -x node`，它不会匹配到自身所在的 shell
+|===
+
+== 来源和延伸阅读
+
+* 模块 1：link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/building_applications/working-with-helm-charts[OpenShift：使用 Helm Chart（Working with Helm charts）^]
+* 前提条件：link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/web_console/web-terminal[OpenShift：Web 终端（Web terminal）^]
+* 模块 7：link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/zero-trust-workload-identity-manager[Zero Trust Workload Identity Manager^]
+* 模块 7：link:https://docs.redhat.com/en/documentation/openshift_container_platform/{ocp_version}/html/security_and_compliance/external-secrets-operator-for-red-hat-openshift[External Secrets Operator for Red Hat OpenShift^]
+* 模块 8：link:https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.4/html/server_administration_guide/managing_openid_connect_and_saml_clients[Red Hat build of Keycloak：管理 OIDC 客户端^]
+* link:https://validatedpatterns.io/patterns/layered-zero-trust/[分层零信任模式（Layered Zero Trust）文档^]

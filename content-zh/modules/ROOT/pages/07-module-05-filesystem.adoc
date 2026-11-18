@@ -1,0 +1,111 @@
+= 模块 5：文件系统零信任
+:navtitle: 模块 5：文件系统零信任
+
+能够在任何位置写入的代理，可以植入二进制文件、更改 DNS 设置，或者在无人检查的地方放置后门。本模块回答：**代理能否在我们允许的路径之外进行读写？阻止它的是内核，而不是普通的文件权限吗？**
+
+您将在策略允许的位置写入，尝试策略不允许的路径，然后通过一次对比将 Landlock 与普通的 Unix 权限区分开来。
+
+.初次接触 Landlock？
+[%collapsible]
+====
+* *Landlock* — 一个 Linux 安全模块（自内核 5.13 起提供），允许进程限制其自身的文件访问；由内核强制执行。
+* *LSM* — Linux 安全模块（Linux Security Module），是 SELinux 和 Landlock 所接入的内核框架。
+* *DAC* — 自主访问控制（discretionary access control）：即普通的所有者/组/其他人权限位。
+* *EACCES* — 内核返回的“Permission denied”（权限被拒绝）错误。
+====
+
+== 技术背景
+
+网关报告的沙箱策略（`openshell policy get {sandbox_name} --full`）如下：
+
+[source,yaml]
+----
+filesystem_policy:
+  read_only:  [/bin, /usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+----
+
+其他一切对代理都是不可见的。`best_effort` 意味着即使在没有 Landlock 的内核上，沙箱也会启动，因此最后一个练习用来证明 Landlock 在此集群上确实在强制执行。
+
+代理以 OpenShift 分配的非 root UID 运行。这一点很重要：`/etc` 和 `/usr` 归 root 所有，因此普通权限也会阻止对这些位置的部分写入。练习 3 使用的是一个普通权限**允许**写入的路径。
+
+== 学习目标
+
+* 演示在允许的路径中读写成功。
+* 演示在这些路径之外写入和列出目录失败。
+* 证明导致拒绝的是 Landlock，而不是 DAC。
+
+== 练习 1：使用允许的路径
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo "This is allowed" > /sandbox/test.txt && cat /sandbox/test.txt
+echo "Temp file" > /tmp/test.txt && cat /tmp/test.txt
+ls /usr/bin/node; cat /etc/hostname'
+----
+
+预期结果: `This is allowed`、`Temp file`、`/usr/bin/node`，以及主机名 `default--{sandbox_name}`。
+
+== 练习 2：尝试被拒绝的路径
+
+NOTE: 下面的每条命令都会失败，并显示 `Permission denied`。这是预期行为。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+echo hacked > /etc/test; cp /dev/null /usr/bin/node; touch /etc/shadow
+ls /; mkdir -p /home/sandbox; ls /opt'
+----
+
+预期结果: `/etc/test: Permission denied`、`cannot create regular file '/usr/bin/node': Permission
+denied`、`cannot touch '/etc/shadow': Permission denied`、`cannot open directory '/': Permission denied`、`cannot create directory '/home/sandbox': Permission denied`，以及 `cannot open directory '/opt':
+Permission denied`。
+
+== 练习 3：证明这是 Landlock
+
+`/tmp`、`/var/tmp` 和 `/dev/shm` 的权限位相同：所有人可写，并设置了粘滞位（sticky bit）。普通权限对它们一视同仁。只有 `/tmp` 在策略中。
+
+[source,bash,role="execute",subs="attributes+"]
+----
+openshell sandbox exec {sandbox_name} < /dev/null -- bash -c '
+stat -c "%A %U %n" / /tmp /var/tmp /dev/shm
+for d in /tmp /var/tmp /dev/shm; do echo probe > $d/probe && echo "$d: write OK" || echo "$d: write DENIED"; done'
+----
+
+预期结果: `/tmp`、`/var/tmp` 和 `/dev/shm` 均显示 `drwxrwxrwt root`，`/` 显示
+`dr-xr-xr-x`（任何人都可以列出其内容）。然后显示 `/tmp: write OK`、`/var/tmp: write DENIED` 和 `/dev/shm: write
+DENIED`。权限相同，结果却不同：唯一的区别就是内核的 Landlock 规则集。练习 2 中的 `ls /` 也是如此，DAC 本来是允许该操作的。
+
+video::../../modules/_images/m5-landlock.mp4[width=800,poster=../../modules/_images/m5-landlock-poster.jpg,title="允许和拒绝的路径，以及 /tmp 与 /var/tmp 的对比（在实验集群上录制）"]
+
+简而言之：代理只能看到两个可写目录，即使在 Unix 权限不会阻止的地方，内核也会强制执行这一限制。
+
+.本练习的脚本化断言
+[%collapsible]
+====
+[source,bash,subs="attributes+"]
+----
+(
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /tmp/probe' >/dev/null 2>&1 || { echo "FAIL: /tmp not writable"; exit 1; }
+  openshell sandbox exec {sandbox_name} < /dev/null -- bash -c 'echo x > /var/tmp/probe' >/dev/null 2>&1 && { echo "FAIL: /var/tmp writable, Landlock not enforcing"; exit 1; }
+  echo PASS
+)
+----
+====
+
+== 证据检查点
+
+* 为什么在这里，单凭 `/etc/test` 被拒绝这一点，不足以证明是 Landlock 在起作用？
+* 对于内核较旧的集群，`compatibility: best_effort` 意味着什么？
+
+.答案
+[%collapsible]
+====
+* `/etc` 归 root 所有，而代理的 UID 不是 root，因此普通权限同样会拒绝该写入。`/var/tmp` 和 `/dev/shm` 的结果以及 `ls /` 才是只有 Landlock 能够解释的拒绝。
+* 沙箱会在没有文件系统限制的情况下启动。在依赖该策略之前，请在任何新集群上运行练习 3 中的检查。
+====
+
+继续进入 xref:08-module-06-credentials.adoc[模块 6：凭据安全]。

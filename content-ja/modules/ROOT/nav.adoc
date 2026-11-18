@@ -1,0 +1,25 @@
+* xref:index.adoc[はじめに]
+* xref:01-overview.adoc[アーキテクチャーと制御境界]
+* xref:02-details.adoc[前提条件と環境]
+
+.デプロイと接続（11 分）
+* xref:03-module-01-deploy.adoc[モジュール 1: OpenShell のデプロイ]
+* xref:04-module-02-client.adoc[モジュール 2: CLI の接続]
+
+.制御の検証（21 分）
+* xref:05-module-03-agent.adoc[モジュール 3: AI エージェントによるコーディング]
+* xref:06-module-04-network.adoc[モジュール 4: ネットワークのゼロトラスト]
+* xref:07-module-05-filesystem.adoc[モジュール 5: ファイルシステムのゼロトラスト]
+* xref:08-module-06-credentials.adoc[モジュール 6: 認証情報のセキュリティー]
+
+.プラットフォーム統合（16 分）
+* xref:09-module-07-ztvp.adoc[モジュール 7: ZTVP 統合]
+* xref:10-module-08-auth.adoc[モジュール 8: ユーザー認証]
+* xref:11-module-09-policy.adoc[モジュール 9: 動的ポリシー]
+
+.まとめ
+* xref:90-cleanup.adoc[クリーンアップ]
+* xref:91-reference.adoc[技術リファレンス]
+
+.ファシリテーター向け
+* xref:modules::92-facilitator-guide.adoc[ファシリテーターガイド（英語）]
